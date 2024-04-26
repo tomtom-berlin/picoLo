@@ -1,0 +1,11 @@
+[
+    {"name": "MaK G1206 545", "address": 1206, "use_long_address": 1, "max_speedstep": 8, "speedsteps": 28},
+    {"name": "BR 312 112-6", "address": 312, "use_long_address": 1, "max_speedstep": 20, "speedsteps": 28},
+    {"name": "V23 024", "address": 23, "use_long_address": 1, "max_speedstep": 10, "speedsteps": 28},
+    {"name": "V60 1255", "address": 60, "use_long_address": 1, "max_speedstep": 15, "speedsteps": 28},
+    {"name": "BR 260 406-4", "address": 260, "use_long_address": 1, "max_speedstep": 15, "speedsteps": 28},
+    {"name": "BR 86 1590-8", "address": 8615, "use_long_address": 1, "max_speedstep": 20, "speedsteps": 28},
+    {"name": "BR 86 460", "address": 8646, "use_long_address": 1, "max_speedstep": 20, "speedsteps": 28},
+    {"name": "BR 92 6582", "address": 92, "use_long_address": 1, "max_speedstep": 10, "speedsteps": 28},
+    {"name": "BR 56 2719", "address": 56, "use_long_address": 1, "max_speedstep": 10, "speedsteps": 28},
+]
