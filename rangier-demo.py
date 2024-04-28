@@ -35,7 +35,7 @@ import rp2
 import ujson
 from micropython import const
 
-PROG_NAME = const("Tom's picoLo")
+PROG_NAME = const("Tom's picoLok")
 PROG_VERSION = const("0.01& 2024-04-26")
 
 ACK_TRESHOLD = const(7.5)  # mA
@@ -61,37 +61,32 @@ def wait_idle(milliseconds):
     while utime.ticks_ms() - t < milliseconds:
         electrical.idle()
 
-def charge_supercap(timeout=10000):
+def charge_supercap(timeout=20000):
     global oled
     global col
     global line
     global electrical
     x = 0
     bias = electrical.get_current()
-    temp = 0
+    temp = bias
     oled.clear()
     oled.display_text(col, line - 12, "Lade Speicher")
     oled.display_text(col, line, f"Ladestrom: {bias:>5} mA")
-    time_remains = timeout
-    t = utime.ticks_ms()
-    while bias >= temp and utime.ticks_ms() - t < time_remains:
-        seconds = (time_remains - utime.ticks_ms() + t) // 1000
-        oled.display_text(col, line + 25, f"max. noch ca. {seconds:>2} s") 
-        oled.display_text(66, line, f"{temp:>5}")
-        temp = electrical.get_current()
-        if temp < bias: # hat sich noch einmal verringert
-            time_remains = timeout
-        bias = temp
-        wait_idle(1000)
-
+    t = utime.ticks_ms() + timeout
+    wait_idle(1000)
+    while utime.ticks_ms() < t:
+        wait_idle(400)
+        seconds = (t - utime.ticks_ms()) // 1000
+        bias = electrical.get_current()
+        oled.display_text(col, line + 25, f"     noch ca. {seconds:>2} s")
+        oled.display_text(66, line, f"{bias:>5}")
+        if temp > bias: # hat sich noch einmal verringert
+            temp = bias
+            t = utime.ticks_ms() + timeout
+   
     oled.clear()
-    oled.display_text(col, round(1.5 * (oled.get_text_height() + 1)), "Bestimme ACK-Schwelle")
-    oled.display_text(col, line, f"ACK-Schwelle: {bias+ACK_TRESHOLD:>4} mA")
+    oled.display_text(0, line, "Fertig")
     wait_idle(2000)
-    oled.clear()
-    oled.display_text(40, line, "Bereit")
-    wait_idle(2000)
-    return bias
 
 def setloco(loco):
     print(f"Write CV 1 = {loco % 128}, 29 = 34, 17 = {192 + (loco // 256)}, 18 = {loco & 0xff}")
@@ -115,12 +110,18 @@ def setloco2(loco):
 
 # --------------------------------------
 # Zeigt eine Zeile mit dem Funktionsstatus
+new = True
 def display_functions(col, line):
     global oled
+    global new
     # Headline
+    if new:
+        oled.clear()
+        for i in range(13):
+            oled.display_text(col + i * 9, line - 18, f"{' ' if i < 10 else '1'}")
+            oled.display_text(col + i * 9, line - 9, f"{'L' if i == 0 else i % 10}")
+    new = False
     for i in range(13):
-        oled.display_text(col + i * 9, line - 18, f"{' ' if i < 10 else '1'}")
-        oled.display_text(col + i * 9, line - 9, f"{'L' if i == 0 else i % 10}")
         oled.display_text(col + i * 9, line,  '*' if this_loco.get_function_state(i) else '-')
     
 
@@ -135,9 +136,9 @@ def get_loco_properties(servicemode):
     wait_idle(2000)
     servicemode.verify_bit(8, 8, 0)
     servicemode.verify_bit(8, 8, 1)
-    cv8 = servicemode.get(8)
-    oled.display_text(col, 45, f"Decoder-Manuf.:{cv8:>3}")
-    #print(f"CV8= {cv8}")
+#     cv8 = servicemode.get(8)
+#     oled.display_text(col, 45, f"Decoder-Manuf.:{cv8:>3}")
+#     #print(f"CV8= {cv8}")
     cv29 = servicemode.get(29)
     #print(f"CV29 = {cv29:3}")
     oled.display_text(col, 45, f"Lange Adresse:{'Ja' if cv29 & (1 << 5) else 'Nein' :>4}")
@@ -158,6 +159,22 @@ def get_loco_properties(servicemode):
         oled.display_text(col, 45, f"Adresse: {adr:>9}")
 
     return adr
+
+
+def function_output_test(this_loco):
+    richtung = 1
+    f_line = 55
+    for i in [0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]:
+        display_functions(0, f_line)
+        if i < 2:
+            this_loco.drive(richtung, 0)
+        this_loco.set_function(i, True)
+        print(f"Funktion {i}{'vorwärts' if i == 0 and richtung == 1 else 'rückwärts' if richtung == 0 and i == 0 else ''}")
+        wait_idle(5000)
+        this_loco.set_function(i, False)
+        richtung = richtung ^ 1 ^ 0
+
+
 
 
 # --------------------------------------
@@ -198,8 +215,8 @@ while utime.ticks_ms() - start_ticks < 5000:
 
 #electrical.reset()
 electrical.idle()
-bias = charge_supercap()
-servicemode = SERVICEMODE(electrical, bias, ACK_TRESHOLD)
+charge_supercap()
+servicemode = SERVICEMODE(electrical, ACK_TRESHOLD)
 
 # #setloco(56)
 # setloco(92)
@@ -207,13 +224,24 @@ servicemode = SERVICEMODE(electrical, bias, ACK_TRESHOLD)
 # #setloco(312)
 # #setloco2(118)
 # #servicemode.manufacturer_reset()
-# cv_nums = [9, 35, 36, 47, 60, 114, 115]
-# cv_vals = [1,  8,  4,  0,  1,  16,  8]
-# cvs = get_cvs(cv_nums)
-# print(cvs)
+#          Acc Dec F0v  F0r  F1   F2   F3   F4   F5   F6   F7   F8   F9   F10 F11  F12  Map  Fvaus Fr  DimA0  A1  A2   A3   A4   A5   A6   A7  AV2   BV2 FABV Fade NEON:dauer anz. # Uhlenbrock
+cv_nums = [ 33,  34,  35,  36,  37,  38,  39,  40,  41,  42,  43,  44,  45,  46,  96, 113, 114, 116, 117, 118, 119, 120, 121, 122, 123, 144, 145, 148, 186, 188, 189, 190]
+#ist                1,   2,   4,   8, 224,  16,  64, 128,   5,  10,   0,   0,   0,   0,   0,   0,   0,  32,  63,  63, 200,  63,  63,  63,  63,   0                        0,   8
+cv_soll = [  1,   2,  12,   0,  96,  16,  0,    0,   5,  10,  12,   0,   0,   0,   0,   4,   8,  32,  32,  32,  32,  32,  63,   0,   0,   1,   1,   6,  31,  16,  20,  10]
+
+cvs = servicemode.get_cvs(cv_nums)
+
+for i in range(len(cv_nums)):
+    print(f"{chr(91) if i == 0 else ','}{cvs[i][0]:>4}", end="")
+print("]")
+for i in range(len(cv_nums)):
+    print(f"{chr(91) if i == 0 else ','}{cvs[i][1]:>4}", end="")
+print("]")
+
 # for i in range(len(cv_nums)):
-#     write(cv_nums[i], cv_vals[i])
-#     print(f"geprüft: CV{cv_nums[i]} == {cv_vals[i]}? => {read(cv_nums[i]) == cv_vals[i]}")
+#      print(f"Setze CV{cv_nums[i]:<3} = {cv_soll[i]:>4} ... ", end="")
+#      servicemode.set(cv_nums[i], cv_soll[i])
+#      print(f"geprüft: {servicemode.get(cv_nums[i]) == cv_soll[i]}")
 
 # cv38 = read(38)
 # print(f"CV38: {cv38}")
@@ -244,7 +272,10 @@ for i in range(0, len(loco_array)):
         this_loco = menu.loco_array[i] 
         break
 
+
 if this_loco != None: # gefunden
+    function_output_test(this_loco)
+    stop()
 
     print(f"aktuelle Lok: {this_loco.name}")
     line = 4
@@ -391,22 +422,8 @@ aux4 = 32
 # for i in range(len(cv_nums)):
 #     write(cv_nums[i], cv_vals[i])
 #     print(f"geprüft: CV{cv_nums[i]} == {cv_vals[i]}? => {read(cv_nums[i]) == cv_vals[i]}")
-# richtung = 1
-# for i in [0, 0, 1, 2, 3, 7, 8, 9]:
-#     display_functions(i, f_line)
-#     if i < 2:
-#         this_loco.drive(richtung, 5)
-#         richtung = richtung ^ 1 ^ 0
-#     this_loco.set_function(i, True)
-#     print(f"Funktion {i}{'vorwärts' if i == 0 and richtung == 1 else 'rückwärts' if richtung == 0 and i == 0 else ''}")
-#     wait_idle(200)
-#     this_loco.drive(richtung, 0)
-#     wait_idle(2000)
-#     this_loco.set_function(i, False)
-# 
-# 
 
-electrical.power_off()
+#electrical.power_off()
 print(f"Digitalspannung {'aus' if electrical.power_state == 0 else 'ein'}")
 oled.clear()
 oled.display_text(col, line, f"Digitalspannung {'aus' if electrical.power_state == 0 else 'ein'}")

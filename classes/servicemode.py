@@ -63,7 +63,7 @@
 #
 
 from micropython import const
-from machine import Timer
+import utime
 
 LONG_PREAMBLE = const(22)
 PREAMBLE = const(14)
@@ -71,11 +71,9 @@ PREAMBLE = const(14)
 
 class SERVICEMODE:
     
-    def __init__(self, electrical, bias, treshold, timeout=30000):
-        self.treshold = treshold + bias
-        self.timeout_flag = False
+    def __init__(self, electrical, treshold, timeout=30000):
+        self.treshold = treshold
         self.timeout = timeout
-        self.timer = Timer(-1)
         self.electrical = electrical
         
     def timer_isr(timer):
@@ -112,37 +110,38 @@ class SERVICEMODE:
 
     def get(self, cv):
         cv_val = 0
-        self.timer.init(period=self.timeout, mode=Timer.ONE_SHOT, callback=self.timer_isr)
+        treshold = self.treshold + self.electrical.get_current()
         for bit in range(1, 9):
             self.verify_bit(cv, bit, 1)
             current = self.electrical.get_current()
-            if current > self.treshold:
+            if current > treshold:
                 cv_val += 1 << (bit - 1)
         print(f"Teste {cv}")
         self.verify(cv, cv_val)
-        while self.electrical.get_current() < self.treshold and self.timeout_flag == False:
+        t = utime.ticks_ms() + self.timeout
+        while self.electrical.get_current() < treshold and t > utime.ticks_ms():
             cv_val = 0
             for bit in range(1, 9):
-                if self.timeout_flag:
-                    break
                 self.verify_bit(cv, bit, 1)
-                if self.electrical.get_current() > self.treshold:
+                if self.electrical.get_current() > treshold:
                     cv_val += 1 << (bit - 1)
             print(f"CV{cv} = {cv_val}")
             self.verify(cv, cv_val)
-        self.timer.deinit()
         return cv_val
 
     def set(self, cv=1, value=3):
         # {Long-preamble} 0 011111AA 0 AAAAAAAA 0 DDDDDDDD 0 EEEEEEEE 1
         cv -= 1
+        treshold = self.treshold + self.electrical.get_current()
+
         self.electrical.send2track([(PREAMBLE, [0x00, 0x00], 3), \
                      (LONG_PREAMBLE, [0b01111100 | (cv >> 8), cv & 0xff, value & 0xff], 5), \
                      (LONG_PREAMBLE, [0b01111100 | (cv >> 8), cv & 0xff, value & 0xff], 6) ])
-        ack_flag = self.electrical.get_current() < self.treshold
+        ack_flag = self.electrical.get_current() < treshold
+    
         while not ack_flag:
             self.electrical.send2track([(LONG_PREAMBLE, [0b01111100 | (cv >> 8), cv & 0xff, value & 0xff], 5)])
-            ack_flag = self.electrical.get_current() < self.treshold
+            ack_flag = self.electrical.get_current() < treshold
  
         self.electrical.send2track([(PREAMBLE, [0x00, 0x00], 1)])
             
