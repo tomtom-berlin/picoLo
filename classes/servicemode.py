@@ -137,11 +137,11 @@ class SERVICEMODE:
         self.electrical.send2track([(PREAMBLE, [0x00, 0x00], 3), \
                      (LONG_PREAMBLE, [0b01111100 | (cv >> 8), cv & 0xff, value & 0xff], 5), \
                      (LONG_PREAMBLE, [0b01111100 | (cv >> 8), cv & 0xff, value & 0xff], 6) ])
-        ack_flag = self.electrical.get_current() < treshold
+        ack_flag = self.electrical.get_current() > treshold
     
         while not ack_flag:
             self.electrical.send2track([(LONG_PREAMBLE, [0b01111100 | (cv >> 8), cv & 0xff, value & 0xff], 5)])
-            ack_flag = self.electrical.get_current() < treshold
+            ack_flag = self.electrical.get_current() > treshold
  
         self.electrical.send2track([(PREAMBLE, [0x00, 0x00], 1)])
             
