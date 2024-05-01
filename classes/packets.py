@@ -74,12 +74,7 @@ class PACKETS:
             self.address = address
             self.use_long_address = use_long_address
             self.max_speed = max_speed
-            if speedsteps == 14:
-                self.speed_controller = self.speed_control_14steps  # TODO
-            elif speedsteps == 128:
-                self.speed_controller = self.speed_control_128steps # TODO
-            else:
-                self.speed_controller = self.speed_control_28steps
+            self.speedsteps = speedsteps
             self.functions = [0b00000, 0b10000, 0b00000]
             self.electrical = electrical
         
@@ -144,7 +139,16 @@ class PACKETS:
     
     # Geschwindigkeitscode 28 Fahrstufen
     def speed_control_128steps(self, direction, speed):
-        pass
+        if speed == -1:
+            speed = 1
+        elif speed == 0:
+            speed = 0
+        else:
+            speed += 1
+            speed &= 0x7e
+        speed |= (direction << 7)
+        speed &= 0xff
+        return speed
 
     # Geschwindigkeitscode 28 Fahrstufen
     def speed_control_28steps(self, direction, speed):
@@ -167,11 +171,23 @@ class PACKETS:
     # fahre mit 28 FS
     def drive(self, richtung, fahrstufe):  # Fahrstufen
         c = 500 if fahrstufe > 0 else 10
-        speed = self.speed_controller(richtung, fahrstufe)
-        for n in range(0, c):
-            if self.use_long_address:
-                self.electrical.send2track([(PREAMBLE, [192 | (self.address // 256), self.address & 0xff, speed], 2)])
-            else:
-                self.electrical.send2track([(PREAMBLE, [self.address, speed], 2)])
+        if self.speedsteps == 28:
+            speed = self.speed_control_28steps(richtung, fahrstufe)
+            for n in range(0, c):
+                if self.use_long_address:
+                    self.electrical.send2track([(PREAMBLE, [192 | (self.address // 256), self.address & 0xff, speed], 2)])
+                else:
+                    self.electrical.send2track([(PREAMBLE, [self.address, speed], 2)])
+        elif self.speedsteps == 128:
+            speed = self.speed_control_128steps(richtung, fahrstufe)
+            for n in range(0, c):
+                if self.use_long_address:
+                    self.electrical.send2track([(PREAMBLE, [192 | (self.address // 256), self.address & 0xff, 0b00111111, speed], 2)])
+                else:
+                    self.electrical.send2track([(PREAMBLE, [self.address, 0b00111111, speed], 2)])
+        elif self.speedsteps == 14:
+            pass
+        else:
+            pass
     
 # --------------------------------------
