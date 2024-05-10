@@ -9,4 +9,4 @@ ein Rangierpuzzle - oder einem Diorama und automatischem Betrieb.
 
 ## Dieses Projekt verwendet die Libraries SSD1309 und XGLCD-Font von [Rototron](https://www.rototron.info/projects/wi-fi-caller-id-blocking/)
 
-### Änderungen: Fehlerbeseitigung, vertiefte Tests der DCC-Instruktionen
+### Änderungen 2024-05-10: Fehlerbeseitigung, vertiefte Tests der DCC-Instruktionen
