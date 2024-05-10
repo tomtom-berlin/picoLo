@@ -71,7 +71,7 @@ PREAMBLE = const(14)
 
 class SERVICEMODE:
     
-    def __init__(self, electrical, treshold, timeout=30000):
+    def __init__(self, electrical, treshold, timeout=5000):
         self.treshold = treshold
         self.timeout = timeout
         self.electrical = electrical
@@ -80,7 +80,12 @@ class SERVICEMODE:
         if timer == self.timer:
             self.timeout_flag = True
 
+    def on(self):
+        self.electrical.servicemode_on()
     
+    def off(self):
+        self.electrical.servicemode_off()
+
     def manufacturer_reset():
         for i in range(0,10):
             servicemode.set(8,0)
@@ -116,7 +121,7 @@ class SERVICEMODE:
             current = self.electrical.get_current()
             if current > treshold:
                 cv_val += 1 << (bit - 1)
-        print(f"Teste {cv}")
+#        print(f"Teste {cv}")
         self.verify(cv, cv_val)
         t = utime.ticks_ms() + self.timeout
         while self.electrical.get_current() < treshold and t > utime.ticks_ms():
@@ -125,7 +130,7 @@ class SERVICEMODE:
                 self.verify_bit(cv, bit, 1)
                 if self.electrical.get_current() > treshold:
                     cv_val += 1 << (bit - 1)
-            print(f"CV{cv} = {cv_val}")
+#            print(f"CV{cv} = {cv_val}")
             self.verify(cv, cv_val)
         return cv_val
 

@@ -82,6 +82,7 @@ class ELECTRICAL:
         self.dir_pin = dir_pin
         self.ack = machine.ADC(machine.Pin(ack_pin))
         self.power_state = self.power.value()
+        self.in_servicemode = False
         self.power_off()
         
         # freq = 500_000 # 2.0us clock cycle
@@ -112,8 +113,8 @@ class ELECTRICAL:
         self.power_state = self.power.value()
 
     def emergency_stop(self):
-        speed = 0b01000000  # Nothalt
-        self.send2track([(PREAMBLE, [0, speed], 20)])
+        speed = 0b01000001  # Nothalt
+        self.send2track([(PREAMBLE, [0, speed], 4)])
 
     def ack_request(self, addr, use_long_address=False):
         if use_long_address == True:
@@ -121,9 +122,16 @@ class ELECTRICAL:
         else:
             self.send2track([(PREAMBLE, [addr & 0x7f, 00001111], 5)])
 
+    def servicemode_on(self):
+        self.in_servicemode = True
+
+    def servicemode_off(self):
+        self.in_servicemode = False
+
     # Reset-Instruction (RP 9.2.1)
     def reset(self):
-        self.send2track([(PREAMBLE, [0x00, 0x00], 3)])
+        if self.in_servicemode == True:
+            self.send2track([(PREAMBLE, [0x00, 0x00], 1)])
 
     # Idle-Instruction (RP 9.2.1)
     def idle(self):

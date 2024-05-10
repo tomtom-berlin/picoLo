@@ -144,7 +144,8 @@ class PACKETS:
         elif speed == 0:
             speed = 0
         else:
-            speed += 1
+            if speed < 126:
+                speed += 1
             speed &= 0x7e
         speed |= (direction << 7)
         speed &= 0xff
@@ -170,7 +171,7 @@ class PACKETS:
 
     # fahre mit 28 FS
     def drive(self, richtung, fahrstufe):  # Fahrstufen
-        c = 500 if fahrstufe > 0 else 10
+        c = 5 if fahrstufe > 0 else 2
         if self.speedsteps == 28:
             speed = self.speed_control_28steps(richtung, fahrstufe)
             for n in range(0, c):

@@ -46,8 +46,9 @@ PWM_PIN = const(19)
 DIR_PIN = const(21)
 ACK_PIN = const(27)
 
-BTN_PIN = const(6)
 DEBOUNCE_TIME = const(20)
+DRV_TIME = const(5000)
+DRV_TIME_F3 = const(7500)
 
 
 def wait_nop(milliseconds):
@@ -61,7 +62,7 @@ def wait_idle(milliseconds):
     while utime.ticks_ms() - t < milliseconds:
         electrical.idle()
 
-def charge_supercap(timeout=20000):
+def charge_supercap(timeout=5000):
     global oled
     global col
     global line
@@ -73,12 +74,10 @@ def charge_supercap(timeout=20000):
     oled.display_text(col, line - 12, "Lade Speicher")
     oled.display_text(col, line, f"Ladestrom: {bias:>5} mA")
     t = utime.ticks_ms() + timeout
-    wait_idle(1000)
+    wait_idle(333)
     while utime.ticks_ms() < t:
-        wait_idle(400)
-        seconds = (t - utime.ticks_ms()) // 1000
+        wait_idle(333)
         bias = electrical.get_current()
-        oled.display_text(col, line + 25, f"     noch ca. {seconds:>2} s")
         oled.display_text(66, line, f"{bias:>5}")
         if temp > bias: # hat sich noch einmal verringert
             temp = bias
@@ -86,7 +85,7 @@ def charge_supercap(timeout=20000):
    
     oled.clear()
     oled.display_text(0, line, "Fertig")
-    wait_idle(2000)
+    wait_idle(500)
 
 def setloco(loco):
     print(f"Write CV 1 = {loco % 128}, 29 = 34, 17 = {192 + (loco // 256)}, 18 = {loco & 0xff}")
@@ -133,18 +132,23 @@ def get_loco_properties(servicemode):
     oled.display_text(col, 9, "   Ermittle")
     oled.display_text(col, 18, "Lokeigenschaften")
 
-    wait_idle(2000)
+    wait_idle(300)
     servicemode.verify_bit(8, 8, 0)
+    wait_idle(300)
     servicemode.verify_bit(8, 8, 1)
-#     cv8 = servicemode.get(8)
-#     oled.display_text(col, 45, f"Decoder-Manuf.:{cv8:>3}")
-#     #print(f"CV8= {cv8}")
+    wait_idle(300)
+    cv8 = servicemode.get(8)
+    wait_idle(300)
+    oled.display_text(col, 45, f"Decoder-Manuf.:{cv8:>3}")
+    print(f"CV8= {cv8}")
     cv29 = servicemode.get(29)
+    wait_idle(300)
     #print(f"CV29 = {cv29:3}")
     oled.display_text(col, 45, f"Lange Adresse:{'Ja' if cv29 & (1 << 5) else 'Nein' :>4}")
-    wait_idle(500)
+    wait_idle(300)
     if cv29 & 0x20:
         cv17 = servicemode.get(17)
+        wait_idle(300)
         print(f"CV17 = {cv17:3}")
         cv18 = servicemode.get(18)
         print(f"CV18 = {cv18:3}")
@@ -161,21 +165,13 @@ def get_loco_properties(servicemode):
     return adr
 
 
-def function_output_test(this_loco):
-    richtung = 1
-    f_line = 55
-    for i in [0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]:
-        display_functions(0, f_line)
-        if i < 2:
-            this_loco.drive(richtung, 0)
+def loco_function_test(this_loco):
+    for i in range(13):
         this_loco.set_function(i, True)
-        print(f"Funktion {i}{'vorwärts' if i == 0 and richtung == 1 else 'rückwärts' if richtung == 0 and i == 0 else ''}")
-        wait_idle(5000)
+        display_functions(0, f_line)
+        wait_idle(250)
         this_loco.set_function(i, False)
-        richtung = richtung ^ 1 ^ 0
-
-
-
+        display_functions(0, f_line)
 
 # --------------------------------------
 
@@ -185,7 +181,7 @@ electrical.emergency_stop()
 
 oled = OLED128x64()
 oled.splash_screen()
-utime.sleep(10)
+utime.sleep(3)
 oled.clear()
 oled.set_font()
 
@@ -208,54 +204,26 @@ oled.clear()
 start_ticks = utime.ticks_ms()
 current = electrical.get_current()
 oled.display_text(col, line, f"Ruhestrom: {current:>5} mA")
-while utime.ticks_ms() - start_ticks < 5000:
+while utime.ticks_ms() - start_ticks < 1000:
     current = electrical.get_current()
     oled.display_text(66, line, f"{current:>5}")
-    wait_idle(300)
+    wait_idle(333)
 
 #electrical.reset()
 electrical.idle()
 charge_supercap()
-servicemode = SERVICEMODE(electrical, ACK_TRESHOLD)
-
-# #setloco(56)
-# setloco(92)
-# #setloco(8615)
-# #setloco(312)
-# #setloco2(118)
-# #servicemode.manufacturer_reset()
-#          Acc Dec F0v  F0r  F1   F2   F3   F4   F5   F6   F7   F8   F9   F10 F11  F12  Map  Fvaus Fr  DimA0  A1  A2   A3   A4   A5   A6   A7  AV2   BV2 FABV Fade NEON:dauer anz. # Uhlenbrock
-cv_nums = [ 33,  34,  35,  36,  37,  38,  39,  40,  41,  42,  43,  44,  45,  46,  96, 113, 114, 116, 117, 118, 119, 120, 121, 122, 123, 144, 145, 148, 186, 188, 189, 190]
-#ist                1,   2,   4,   8, 224,  16,  64, 128,   5,  10,   0,   0,   0,   0,   0,   0,   0,  32,  63,  63, 200,  63,  63,  63,  63,   0                        0,   8
-cv_soll = [  1,   2,  12,   0,  96,  16,  0,    0,   5,  10,  12,   0,   0,   0,   0,   4,   8,  32,  32,  32,  32,  32,  63,   0,   0,   1,   1,   6,  31,  16,  20,  10]
-
-cvs = servicemode.get_cvs(cv_nums)
-
-for i in range(len(cv_nums)):
-    print(f"{chr(91) if i == 0 else ','}{cvs[i][0]:>4}", end="")
-print("]")
-for i in range(len(cv_nums)):
-    print(f"{chr(91) if i == 0 else ','}{cvs[i][1]:>4}", end="")
-print("]")
-
-# for i in range(len(cv_nums)):
-#      print(f"Setze CV{cv_nums[i]:<3} = {cv_soll[i]:>4} ... ", end="")
-#      servicemode.set(cv_nums[i], cv_soll[i])
-#      print(f"geprüft: {servicemode.get(cv_nums[i]) == cv_soll[i]}")
-
-# cv38 = read(38)
-# print(f"CV38: {cv38}")
-# set_function_cv(39, cv38)
-#loco_array = load_locomotives()
+servicemode = SERVICEMODE(electrical, ACK_TRESHOLD, 3000)
+servicemode.on()
 
 menu = MENU(oled, electrical, "data/meine_lokomotiven.json")
 
 adr = get_loco_properties(servicemode)
+servicemode.off()
 
 #adr = None
 if adr == None:
     menu.show()
-    for i in ('+', '+', '+', '-', '-', '-', '-'):
+    for i in ('+', '+', '+', '-', '-', '+', '+'):
         loco = menu.select(i)
         utime.sleep_ms(100)
     adr = loco.address
@@ -274,8 +242,8 @@ for i in range(0, len(loco_array)):
 
 
 if this_loco != None: # gefunden
-    function_output_test(this_loco)
-    stop()
+#     stop()
+    this_loco.set_function(9, False)
 
     print(f"aktuelle Lok: {this_loco.name}")
     line = 4
@@ -286,47 +254,50 @@ if this_loco != None: # gefunden
 
 
     speed = this_loco.max_speed
-    for i in range(13):
-        this_loco.set_function(i, True)
-        display_functions(0, f_line)
-        wait_idle(2500)
-        this_loco.set_function(i, False)
-        display_functions(0, f_line)
-
+    loco_function_test(this_loco)
+    
     wait_idle(1000)
 
-    this_loco.set_function(7, True)
+    this_loco.set_function(0, True)
     display_functions(0, f_line)
     print(f"fahren vorw. {speed}")
     oled.display_text(col, line, f"Zugfahrt    -> {speed:>4}")
 
-    this_loco.drive(1, speed)
+    t = utime.ticks_ms()
+    while t + DRV_TIME > utime.ticks_ms():
+        this_loco.drive(1, speed)
+    this_loco.drive(1, 1)
     print("stop")
     oled.display_text(col, line, f"Zugfahrt       HALT")
-    this_loco.drive(0, 0)
+    this_loco.drive(1, 0)
     wait_idle(1000)
     this_loco.set_function(4, True)
-    this_loco.set_function(7, False)
+    this_loco.set_function(0, False)
     display_functions(0, f_line)
 
     wait_idle(1000)
-    this_loco.set_function(8, True)
+    this_loco.drive(0, 0)
+    this_loco.set_function(0, True)
     this_loco.set_function(4, False)
 #    this_loco.set_function(0, True)
     display_functions(0, f_line)
 
     print(f"fahren rückw. {speed}")
     oled.display_text(col, line, f"Zugfahrt    <- {speed:>4}")
-    this_loco.drive(0, speed)
+    t = utime.ticks_ms()
+    while t + DRV_TIME > utime.ticks_ms():
+        this_loco.drive(0, speed)
+    this_loco.drive(0, 1)
     wait_idle(1000)
 
     print("stop")
     oled.display_text(col, line, f"Zugfahrt       HALT")
+    wait_idle(1000)
     this_loco.drive(0, 0)
     this_loco.set_function(4, True)
-    this_loco.set_function(8, False)
+    this_loco.set_function(0, False)
     display_functions(0, f_line)
-    wait_idle(1000)
+    wait_idle(200)
 
 # Nachschieben
     this_loco.set_function(1, True)
@@ -335,20 +306,27 @@ if this_loco != None: # gefunden
     print(f"schieben vorw. {speed}")
     oled.display_text(col, line, f"Schieben    -> {speed:>4}")
 
-    this_loco.drive(1, speed)
+    t = utime.ticks_ms()
+    while t + DRV_TIME > utime.ticks_ms():
+        this_loco.drive(1, speed)
+    this_loco.drive(1, 1)
+    wait_idle(1000)
     print("stop")
     oled.display_text(col, line, f"Schieben       HALT")
     this_loco.drive(0, 0)
-    wait_idle(1000)
+    wait_idle(200)
     this_loco.set_function(4, True)
     display_functions(0, f_line)
 
-    wait_idle(1000)
+    wait_idle(200)
     this_loco.set_function(4, False)
     display_functions(0, f_line)
     print(f"schieben rückw. {speed}")
     oled.display_text(col, line, f"Schieben    <- {speed:>4}")
-    this_loco.drive(0, speed)
+    t = utime.ticks_ms()
+    while t + DRV_TIME > utime.ticks_ms():
+        this_loco.drive(0, speed)
+    this_loco.drive(0, 1)
     wait_idle(1000)
 
     print("stop")
@@ -361,12 +339,15 @@ if this_loco != None: # gefunden
 
     # Rangiergang
     this_loco.set_function(3, True)
-    this_loco.set_function(6, True)
+#    this_loco.set_function(6, True)
     this_loco.set_function(4, False)
     display_functions(0, f_line)
     print(f"rangieren vorw. {speed}")
     oled.display_text(col, line, f"Rangiergang -> {speed:>4}")
-    this_loco.drive(1, speed)
+    t = utime.ticks_ms()
+    while t + DRV_TIME_F3 > utime.ticks_ms():
+        this_loco.drive(1, speed)
+    this_loco.drive(1, 1)
     print("stop")
     oled.display_text(col, line, f"               HALT")
     this_loco.drive(1, 0)
@@ -374,9 +355,12 @@ if this_loco != None: # gefunden
     wait_idle(1000)
 
     print(f"rangieren rückw. {speed}")
-    oled.display_text(col, line, f"Rangiergang -> {speed:>4}")
-    this_loco.drive(0, speed)
+    oled.display_text(col, line, f"Rangiergang <- {speed:>4}")
     wait_idle(1000)
+    t = utime.ticks_ms()
+    while t + DRV_TIME_F3 > utime.ticks_ms():
+        this_loco.drive(0, speed)
+    this_loco.drive(0, 1)
     print("stop")
     oled.display_text(col, line, f"               HALT")
     this_loco.drive(0, 0)
