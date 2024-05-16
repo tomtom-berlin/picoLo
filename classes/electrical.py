@@ -81,8 +81,8 @@ class ELECTRICAL:
     DENOISE_SAMPLES = const(1)  # Anzahl der Messzyklen, für Rauschunterdrückung
     SENS_AMPERE_PER_AMPERE = (1000000 / 377) # Empfindlichkeit: 377µA / A lt. Datenblatt
     SHORT = const(500) # max. zul. Strom in mA
-	PREAMBLE = const(14)       # Standard Präambel für DCC-Instruktionen
-	LONG_PREAMBLE = const(22)  # Präambel f. Servicemode
+    PREAMBLE = const(14)       # Standard Präambel für DCC-Instruktionen
+    LONG_PREAMBLE = const(22)  # Präambel f. Servicemode
 
     IDLE =  [ const(0b11111111111111111111111111111111), const(0b11110111111110000000000111111111) ]
     RESET = [ const(0b11111111111111111111111111111111), const(0b11110000000000000000000000000001) ]
