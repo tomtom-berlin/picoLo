@@ -67,9 +67,6 @@ from micropython import const, alloc_emergency_exception_buf
 import utime
 
 
-PREAMBLE = const(14)       # Standard Präambel für DCC-Instruktionen
-LONG_PREAMBLE = const(22)  # Präambel f. Servicemode
-
 alloc_emergency_exception_buf(100)
 
 class BoundsException(Exception):
@@ -84,7 +81,8 @@ class ELECTRICAL:
     DENOISE_SAMPLES = const(1)  # Anzahl der Messzyklen, für Rauschunterdrückung
     SENS_AMPERE_PER_AMPERE = (1000000 / 377) # Empfindlichkeit: 377µA / A lt. Datenblatt
     SHORT = const(500) # max. zul. Strom in mA
-
+	PREAMBLE = const(14)       # Standard Präambel für DCC-Instruktionen
+	LONG_PREAMBLE = const(22)  # Präambel f. Servicemode
 
     IDLE =  [ const(0b11111111111111111111111111111111), const(0b11110111111110000000000111111111) ]
     RESET = [ const(0b11111111111111111111111111111111), const(0b11110000000000000000000000000001) ]
@@ -108,7 +106,6 @@ class ELECTRICAL:
         self.short = False
         self.high_current_ticks = 0
         self.last_current = 0
-        self.current_measure_timer = None
         
         # freq = 500_000 # 2.0us clock cycle
         self.statemachine = rp2.StateMachine(0, self.dccbit, freq=500000, set_base=machine.Pin(self.dir_pin))
@@ -131,8 +128,7 @@ class ELECTRICAL:
         self.power_state = False
         self.emergency = False
         self.ringbuffer = []
-        self.servicemode_buffer = []
-#        self.current_measure_timer.deinit()
+
 
     def power_on(self):
         self.pwm.value(1)
@@ -141,7 +137,7 @@ class ELECTRICAL:
         self.power_state = True
         self.emergency = False
         self.short = False
-#        self.current_measure_timer = machine.Timer(period=5, mode=machine.Timer.PERIODIC, callback=self.isr_current_measurement)
+
 
     def get_actual_current(self):
         return self.last_current
@@ -252,9 +248,9 @@ class ELECTRICAL:
                 err ^= byte
             packet.append(err)
             if self.in_servicemode:
-                preamble = 22
+                preamble = self.LONG_PREAMBLE
             else:
-                preamble = 14
+                preamble = self.PREAMBLE
             bits = preamble + len(packet) * 9 + 1
             padding = 32 - (bits % 32) # links mit 1 erweitern bis Wortgrenze
             for i in range(0, padding + preamble):
@@ -343,7 +339,7 @@ class ELECTRICAL:
                 else:
                     buffer = self.ringbuffer
             else: # Servicemode
-                if self.servicemode_buffer == []:
+                if self.ringbuffer == []:
                     buffer = self.RESET
                 else:
                     buffer = self.ringbuffer
@@ -363,7 +359,6 @@ class ELECTRICAL:
                 self.current_measurement()
                 if self.short:
                     self.power_off()
-#                    self.current_measure_timer.deinit()
                     return False
         
                 if self.buffer_dirty:
