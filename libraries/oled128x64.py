@@ -22,8 +22,8 @@ class OLED128x64:
         text_height = self.font.height
         return text_height
 
-    def splash_screen(self, splash_sprite="images/V60_128x64.mono"):
-        self.oled.draw_bitmap(splash_sprite, 0, 0, 128, 64, True)
+    def splash_screen(self, splash_sprite="images/V60_120x52.mono"):
+        self.oled.draw_bitmap(splash_sprite, 4, 0, 120, 52, True)
         self.oled.present()
 
     def set_font(self, font_name="FixedFont5x8.c", bbox_w=5, bbox_h=8):

@@ -11,7 +11,7 @@
 #
 
 from libraries.oled128x64 import OLED128x64
-from classes.packets import PACKETS
+from classes.electrical import PACKETS
 import ujson
 from micropython import const
 
@@ -45,7 +45,6 @@ class MENU:
                     loco_array.append(PACKETS(name=loco["name"],
                                               address=loco["address"],
                                               use_long_address=loco["use_long_address"],
-                                              max_speed=loco["max_speedstep"],
                                               speedsteps=loco["speedsteps"],
                                               electrical=self.electrical))
         
