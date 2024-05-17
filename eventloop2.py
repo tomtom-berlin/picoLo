@@ -31,7 +31,7 @@
 # Rht:           | Vorwärst beschleunigen oder rückwärts bremsen |   10
 # Mid:           | sofort Fahrstufe 0                            |    9
 # Set:           | Funktion lt. Nr. einschalten                  |    8
-# Rst:           | Funktion lt. Nr. ausschalten                  |    7
+# Rst:           | Funktion lt. Nr. ausschalten                  |    7  
 # ---------------------------------------------------------------------------------------
 
 PROG_NAME = const("Tom's picoLok")
@@ -222,7 +222,7 @@ try:
     for i in electrical.locos:
         print(f"Addr: {i.address} = Name: {i.name}, Speed: {i.current_speed}, Fn: [{i.functions[0]}, {i.functions[1]}, {i.functions[2]}]")
     electrical.power_on()
-    if not electrical.loop(controller=locommander2):
+    if not electrical.loop(controller=locommander):
         print(f"Short: {electrical.short}")
     
     electrical.power_off()
