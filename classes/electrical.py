@@ -63,14 +63,8 @@
 #
 import machine
 import rp2
-from micropython import const, alloc_emergency_exception_buf
+from micropython import const
 import utime
-
-
-alloc_emergency_exception_buf(100)
-
-class BoundsException(Exception):
-    pass
 
 
 class ELECTRICAL:
