@@ -80,7 +80,9 @@ class ELECTRICAL:
     AREF_VOLT = const(3300) # mV !!
     DENOISE_SAMPLES = const(1)  # Anzahl der Messzyklen, für Rauschunterdrückung
     SENS_AMPERE_PER_AMPERE = (1000000 / 377) # Empfindlichkeit: 377µA / A lt. Datenblatt
-    SHORT = const(500) # max. zul. Strom in mA
+    SHORT = const(500)         # erlaubter max. Strom in mA
+    SM_SHORT = const(250)      # im Servicemode für die zul. Dauer erlaubter max. Strom (mA)
+    SM_SHORT_MS = const(100)   # zul. Dauer des erhöhten Stromes
     PREAMBLE = const(14)       # Standard Präambel für DCC-Instruktionen
     LONG_PREAMBLE = const(22)  # Präambel f. Servicemode
 
@@ -143,7 +145,6 @@ class ELECTRICAL:
         return self.last_current
 
     def emergency_stop(self):
-        self.semaphore = False
         self.emergency = True
 
     def servicemode_on(self):
@@ -173,18 +174,14 @@ class ELECTRICAL:
             analog_value += self.ack.read_u16()
         return round(self.raw2mA(analog_value / self.DENOISE_SAMPLES))
     
-#    def isr_current_measurement(self):#, timer):
-#        if timer != self.current_measure_timer:
-#            return
-#        if self.power_state == True:
     def current_measurement(self):
         Iload = self.get_current()
         if Iload > self.SHORT:
             self.short = True
 
         if self.in_servicemode:
-            if Iload > 250: # Kurzschluss im Servicemode
-                if utime.ticks_ms() - self.high_current_ticks > 100: # RP 9.2.3 erlaubt 100 ms mit max. 250 mA
+            if Iload > self.SM_SHORT: # Kurzschluss im Servicemode
+                if utime.ticks_ms() - self.high_current_ticks > self.SM_SHORT_MS: # RP 9.2.3 erlaubt 100 ms mit max. 250 mA
                     self.short = True
                 elif self.high_current_ticks == 0:
                     self.high_current_ticks = utime.ticks_ms()
