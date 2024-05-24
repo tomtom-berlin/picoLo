@@ -145,12 +145,12 @@ class ELECTRICAL:
 
     def servicemode_on(self):
         self.mode = 2
-        self.overcurrent_ticks = 0
+        self.overcurrent_ticks = -1
         self.ack_start = -1
 
     def servicemode_off(self):
         self.mode = 0
-        self.overcurrent_ticks = 0
+        self.overcurrent_ticks = -1
         self.ack_start = -1
 
     # Reset-Instruction (RP 9.2.1)
@@ -179,12 +179,13 @@ class ELECTRICAL:
 
         if self.mode == 2:
             if Iload > self.SM_SHORT: # Kurzschluss im Servicemode
-                if utime.ticks_ms() - self.overcurrent_ticks > self.SM_SHORT_MS: # RP 9.2.3 erlaubt 100 ms mit max. 250 mA
-                    self.short = True
-                elif self.overcurrent_ticks == 0:
+                if self.overcurrent_ticks < 0:
                     self.overcurrent_ticks = utime.ticks_ms()
+                elif utime.ticks_ms() - self.overcurrent_ticks > self.SM_SHORT_MS: # RP 9.2.3 erlaubt 100 ms mit max. 250 mA
+                    self.short = True
+                    self.overcurrent_ticks = -1
             else:
-                self.overcurrent_ticks = 0
+                self.overcurrent_ticks = -1
                 if self.wait_for_ack:
                     if self.ack_start < 0:
                 		if Iload - self.last_current >= self.ACK_TRESHOLD:
