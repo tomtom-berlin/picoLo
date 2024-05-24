@@ -74,6 +74,7 @@ class ELECTRICAL:
     AREF_VOLT = const(3300) # mV !!
     DENOISE_SAMPLES = const(1)  # Anzahl der Messzyklen, für Rauschunterdrückung
     SENS_AMPERE_PER_AMPERE = (1000000 / 377) # Empfindlichkeit: 377µA / A lt. Datenblatt
+    ACK_TRESHOLD = const(40)   # Stromhub in mA f. Ack
     SHORT = const(500)         # erlaubter max. Strom in mA
     SM_SHORT = const(250)      # im Servicemode für die zul. Dauer erlaubter max. Strom (mA)
     SM_SHORT_MS = const(100)   # zul. Dauer des erhöhten Stromes
@@ -92,15 +93,16 @@ class ELECTRICAL:
         self.dir_pin = dir_pin
         self.ack = machine.ADC(machine.Pin(ack_pin))
         self.power_state = self.power.value()
-        self.in_servicemode = False
+        self.mode = 0 # 0=inaktiv, 1=operational, 2=servicemode
         self.wait_for_ack = False
         self.ack_committed = False
+        self.ack_start = -1
         self.locos = []
         self.ringbuffer = []
         self.buffer_dirty = False
         self.emergency = False
         self.short = False
-        self.high_current_ticks = 0
+        self.overcurrent_ticks = -1
         self.last_current = 0
         
         # freq = 500_000 # 2.0us clock cycle
@@ -142,12 +144,14 @@ class ELECTRICAL:
         self.emergency = True
 
     def servicemode_on(self):
-        self.in_servicemode = True
-        self.high_current_ticks = 0
+        self.mode = 2
+        self.overcurrent_ticks = 0
+        self.ack_start = -1
 
     def servicemode_off(self):
-        self.in_servicemode = False
-        self.high_current_ticks = 0
+        self.mode = 0
+        self.overcurrent_ticks = 0
+        self.ack_start = -1
 
     # Reset-Instruction (RP 9.2.1)
     def reset(self):
@@ -173,14 +177,24 @@ class ELECTRICAL:
         if Iload > self.SHORT:
             self.short = True
 
-        if self.in_servicemode:
+        if self.mode == 2:
             if Iload > self.SM_SHORT: # Kurzschluss im Servicemode
-                if utime.ticks_ms() - self.high_current_ticks > self.SM_SHORT_MS: # RP 9.2.3 erlaubt 100 ms mit max. 250 mA
+                if utime.ticks_ms() - self.overcurrent_ticks > self.SM_SHORT_MS: # RP 9.2.3 erlaubt 100 ms mit max. 250 mA
                     self.short = True
-                elif self.high_current_ticks == 0:
-                    self.high_current_ticks = utime.ticks_ms()
+                elif self.overcurrent_ticks == 0:
+                    self.overcurrent_ticks = utime.ticks_ms()
             else:
-                self.high_current_ticks = 0
+                self.overcurrent_ticks = 0
+                if self.wait_for_ack:
+                    if self.ack_start < 0:
+                		if Iload - self.last_current >= self.ACK_TRESHOLD:
+                        	self.ack_start = utime.ticks_us()
+                    else:
+                        if Iload - self.last_current < self.ACK_TRESHOLD:
+                            pulse_time = utime.ticks_us() - self.ack_start
+                            self.ack_committed = 4500 < pulse_time < 7000
+                            self.ack_start = -1
+                            self.wait_for_ack = False
 
         self.last_current = Iload
     
@@ -238,7 +252,7 @@ class ELECTRICAL:
             for byte in packet:
                 err ^= byte
             packet.append(err)
-            if self.in_servicemode:
+            if self.mode == 2:
                 preamble = self.LONG_PREAMBLE
             else:
                 preamble = self.PREAMBLE
@@ -254,7 +268,7 @@ class ELECTRICAL:
         return (padding + bits) // 32, stream  # Anzahl der Worte + Bitstream
             
     def sync_buffer(self, words, stream):  # in den Ringpuffer schieben
-        if not self.in_servicemode:
+        if not self.mode:
             while words > 0:
                 words -= 1
                 self.ringbuffer.append(stream >> words * 32 & 0xffffffff)
@@ -318,22 +332,23 @@ class ELECTRICAL:
                 buffer.extend(buffer)
             self.emergency = False
         else:
-            if not self.in_servicemode:
-                if self.buffer_dirty == True:
-                    self.ringbuffer = []
-                    l, w = self.generate_instructions()
-                    for i in range(len(l)):
-                        if l[i] > 0:
-                            self.sync_buffer(l[i], w[i])
+            if self.mode == 1:
+                self.ringbuffer = []
+                l, w = self.generate_instructions()
+                for i in range(len(l)):
+                    if l[i] > 0:
+                        self.sync_buffer(l[i], w[i])
                 if self.ringbuffer == []:
                     buffer = self.IDLE
                 else:
                     buffer = self.ringbuffer
-            else: # Servicemode
+            elif self.mode == 2: # Servicemode
                 if self.ringbuffer == []:
                     buffer = self.RESET
                 else:
                     buffer = self.ringbuffer
+            else:
+                buffer = self.IDLE
         return buffer
 
     def loop(self, controller=None):   # Alias für die Gleissignalerzeugung
@@ -358,14 +373,13 @@ class ELECTRICAL:
                 else:
                     state = machine.disable_irq()
                     
-                    if not self.in_servicemode:
+                    if self.mode < 2:
                         for word in buffer:
                             self.statemachine.put(word)
                     else:
                         self.wait_for_ack = True
                         self.ack_commited = False
-                        while buffer != [] and not self.ack_committed:
-                            word = buffer.pop(0)
+                        for word in buffer:
                             self.statemachine.put(word)
                             
                     machine.enable_irq(state)
