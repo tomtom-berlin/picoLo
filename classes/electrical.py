@@ -72,9 +72,8 @@ class ELECTRICAL:
     CURRENT_SENS_ERROR = const(4.9)
     SENS_SHUNT = const(20000) # Ohm
     AREF_VOLT = const(3300) # mV !!
-    DENOISE_SAMPLES = const(1)  # Anzahl der Messzyklen, für Rauschunterdrückung
+    DENOISE_SAMPLES = const(3)  # Anzahl der Messzyklen, für Rauschunterdrückung
     SENS_AMPERE_PER_AMPERE = (1000000 / 377) # Empfindlichkeit: 377µA / A lt. Datenblatt
-    ACK_TRESHOLD = const(40)   # Stromhub in mA f. Ack
     SHORT = const(500)         # erlaubter max. Strom in mA
     SM_SHORT = const(250)      # im Servicemode für die zul. Dauer erlaubter max. Strom (mA)
     SM_SHORT_MS = const(100)   # zul. Dauer des erhöhten Stromes
@@ -93,16 +92,15 @@ class ELECTRICAL:
         self.dir_pin = dir_pin
         self.ack = machine.ADC(machine.Pin(ack_pin))
         self.power_state = self.power.value()
-        self.mode = 0 # 0=inaktiv, 1=operational, 2=servicemode
+        self.mode = 0
         self.wait_for_ack = False
         self.ack_committed = False
-        self.ack_start = -1
         self.locos = []
         self.ringbuffer = []
         self.buffer_dirty = False
         self.emergency = False
         self.short = False
-        self.overcurrent_ticks = -1
+        self.overcurrent_ticks = 0
         self.last_current = 0
         
         # freq = 500_000 # 2.0us clock cycle
@@ -145,13 +143,11 @@ class ELECTRICAL:
 
     def servicemode_on(self):
         self.mode = 2
-        self.overcurrent_ticks = -1
-        self.ack_start = -1
+        self.overcurrent_ticks = 0
 
     def servicemode_off(self):
         self.mode = 0
-        self.overcurrent_ticks = -1
-        self.ack_start = -1
+        self.overcurrent_ticks = 0
 
     # Reset-Instruction (RP 9.2.1)
     def reset(self):
@@ -188,8 +184,8 @@ class ELECTRICAL:
                 self.overcurrent_ticks = -1
                 if self.wait_for_ack:
                     if self.ack_start < 0:
-                		if Iload - self.last_current >= self.ACK_TRESHOLD:
-                        	self.ack_start = utime.ticks_us()
+                        if Iload - self.last_current >= self.ACK_TRESHOLD:
+                            self.ack_start = utime.ticks_us()
                     else:
                         if Iload - self.last_current < self.ACK_TRESHOLD:
                             pulse_time = utime.ticks_us() - self.ack_start
@@ -269,7 +265,7 @@ class ELECTRICAL:
         return (padding + bits) // 32, stream  # Anzahl der Worte + Bitstream
             
     def sync_buffer(self, words, stream):  # in den Ringpuffer schieben
-        if not self.mode:
+        if self.mode > 0:
             while words > 0:
                 words -= 1
                 self.ringbuffer.append(stream >> words * 32 & 0xffffffff)
@@ -333,8 +329,9 @@ class ELECTRICAL:
                 buffer.extend(buffer)
             self.emergency = False
         else:
-            if self.mode == 1:
+            if self.mode == 1: # Operational 
                 self.ringbuffer = []
+#                if self.locos != []:
                 l, w = self.generate_instructions()
                 for i in range(len(l)):
                     if l[i] > 0:
@@ -347,9 +344,14 @@ class ELECTRICAL:
                 if self.ringbuffer == []:
                     buffer = self.RESET
                 else:
+                    for r in self.RESET:
+                        buffer.append(r)
+                    for i in range(3):
+                        buffer.extend(buffer)
                     buffer = self.ringbuffer
             else:
                 buffer = self.IDLE
+
         return buffer
 
     def loop(self, controller=None):   # Alias für die Gleissignalerzeugung
@@ -360,6 +362,7 @@ class ELECTRICAL:
 
         if controller==None:
             return False
+        buffer = self.buffering()
         while controller():
             if self.power_state == True:
             
@@ -374,13 +377,17 @@ class ELECTRICAL:
                 else:
                     state = machine.disable_irq()
                     
-                    if self.mode < 2:
+                    if self.mode == 1:
                         for word in buffer:
                             self.statemachine.put(word)
-                    else:
+                    elif self.mode == 2:
                         self.wait_for_ack = True
                         self.ack_commited = False
-                        for word in buffer:
+                        while buffer != [] and not self.ack_committed:
+                            word = buffer.pop(0)
+                            self.statemachine.put(word)
+                    else:
+                        for word in self.IDLE:
                             self.statemachine.put(word)
                             
                     machine.enable_irq(state)
@@ -451,6 +458,9 @@ class PACKETS:
 
     # Funktionsbits setzen und an Lok senden
     def set_function(self, function_nr, status = True):
+        if self.electrical.mode != 1:
+            self.electrical.mode = 1
+
         if 0 <= function_nr <= 12:
             function_group = self.get_function_group_index(function_nr)
             instruction_prefix = self.function_control(function_nr)
@@ -462,7 +472,105 @@ class PACKETS:
         
     # fahre mit 14 oder 28/128 FS (128 bevorzugt)
     def drive(self, richtung, fahrstufe):  # Fahrstufen
+        if self.electrical.mode != 1:
+            self.electrical.mode = 1
         self.current_speed = {"Dir": richtung, "FS": fahrstufe}
         self.electrical.buffer_dirty = True
+        
     
 # --------------------------------------
+
+
+class SERVICEMODE:
+    
+    def __init__(self, electrical, treshold, timeout=5000):
+        self.treshold = treshold
+        self.timeout = timeout
+        self.electrical = electrical
+        
+    def timer_isr(timer):
+        if timer == self.timer:
+            self.timeout_flag = True
+
+    def on(self):
+        self.electrical.servicemode_on()
+    
+    def off(self):
+        self.electrical.servicemode_off()
+
+    def manufacturer_reset():
+        for i in range(0,10):
+            servicemode.set(8,0)
+
+    # Liest eine Gruppe von CVs
+    def get_cvs(self, cvs = []):
+        cv_array = []
+        for cv in cvs:
+            cv_array.append((cv, self.get(cv)))
+        return cv_array
+
+    def verify_bit(self, cv=1, bit=1, value=0):
+        if self.electrical.mode != 2:
+            self.electrical.mode = 2
+
+        # {Long-preamble} 0 011110AA 0 AAAAAAAA 0 111KDBBB 0 EEEEEEEE 1
+        cv -= 1
+        bit -= 1
+        self.electrical.send2track([(PREAMBLE, [0x00, 0x00], 3), (LONG_PREAMBLE, \
+                    [0b1111000 | (cv >> 8), cv & 0xff, (0b11100000 | value << 3 | bit) & 0xff], 5), \
+                    (PREAMBLE, [0x00, 0x00], 1)])
+
+
+    def verify(self, cv=1, value=3):
+        if self.electrical.mode != 2:
+            self.electrical.mode = 2
+        # {Long-preamble} 0 011101AA 0 AAAAAAAA 0 DDDDDDDD 0 EEEEEEEE 1
+        cv -= 1
+        self.electrical.send2track([(PREAMBLE, [0x00, 0x00], 3), \
+                    (LONG_PREAMBLE, [0b01110100 | (cv >> 8), cv & 0xff, value & 0xff], 5), \
+                    (PREAMBLE, [0x00, 0x00], 1)])
+
+    def get(self, cv):
+        if self.electrical.mode != 2:
+            self.electrical.mode = 2
+        cv_val = 0
+        treshold = self.treshold + self.electrical.get_current()
+        for bit in range(1, 9):
+            self.verify_bit(cv, bit, 1)
+            current = self.electrical.get_current()
+            if current > treshold:
+                cv_val += 1 << (bit - 1)
+#        print(f"Teste {cv}")
+        self.verify(cv, cv_val)
+        t = utime.ticks_ms() + self.timeout
+        while self.electrical.get_current() < treshold and t > utime.ticks_ms():
+            cv_val = 0
+            for bit in range(1, 9):
+                self.verify_bit(cv, bit, 1)
+                if self.electrical.get_current() > treshold:
+                    cv_val += 1 << (bit - 1)
+#            print(f"CV{cv} = {cv_val}")
+            self.verify(cv, cv_val)
+        return cv_val
+
+    def set(self, cv=1, value=3):
+        if self.electrical.mode != 2:
+            self.electrical.mode = 2
+        # {Long-preamble} 0 011111AA 0 AAAAAAAA 0 DDDDDDDD 0 EEEEEEEE 1
+        cv -= 1
+        treshold = self.treshold + self.electrical.get_current()
+
+        self.electrical.send2track([(PREAMBLE, [0x00, 0x00], 3), \
+                     (LONG_PREAMBLE, [0b01111100 | (cv >> 8), cv & 0xff, value & 0xff], 5), \
+                     (LONG_PREAMBLE, [0b01111100 | (cv >> 8), cv & 0xff, value & 0xff], 6) ])
+        ack_flag = self.electrical.get_current() > treshold
+    
+        while not ack_flag:
+            self.electrical.send2track([(LONG_PREAMBLE, [0b01111100 | (cv >> 8), cv & 0xff, value & 0xff], 5)])
+            ack_flag = self.electrical.get_current() > treshold
+ 
+        self.electrical.send2track([(PREAMBLE, [0x00, 0x00], 1)])
+            
+            
+# --------------------------------------
+
