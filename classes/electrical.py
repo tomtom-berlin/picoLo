@@ -92,7 +92,8 @@ class ELECTRICAL:
         self.dir_pin = dir_pin
         self.ack = machine.ADC(machine.Pin(ack_pin))
         self.power_state = self.power.value()
-        self.mode = 0
+        self.mode = 0                          # 0 = inactive, 1 = operational, 2 = servicemode
+        self.ack_start = -1
         self.wait_for_ack = False
         self.ack_committed = False
         self.locos = []
@@ -100,7 +101,7 @@ class ELECTRICAL:
         self.buffer_dirty = False
         self.emergency = False
         self.short = False
-        self.overcurrent_ticks = 0
+        self.overcurrent_ticks = -1
         self.last_current = 0
         
         # freq = 500_000 # 2.0us clock cycle
