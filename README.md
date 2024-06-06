@@ -1,4 +1,6 @@
 # picoLok - Digitalsteuerung mit RPI pico
+
+### Version 0.5ß  2024-06-06
 ### Version 0.03& 2024-05-17
 (c) 2024 Thomas Borrmann
 Lizenz: GPLv3 (sh. https://www.gnu.org/licenses/gpl-3.0.html.en)
@@ -19,6 +21,13 @@ ein Rangierpuzzle - oder einem Diorama und automatischem Betrieb.
 ### Änderungen 2024-05-17:
 - Mini-Joystick zur Ereignisverarbeitung (sh. auch Kommentare in eventloop2.py)
 - thread_test umbenannt in eventloop bzw. eventloop2
+
+### Änderungen 2024-06-06:
+- Servicemode funktioniert wieder
+- neue Beispielprogramme op_test für Operational Mode und
+  sm_test für Servicemode
+
+
 
 ### Installation:
 - alle Verzeichnisse z.B. mit rshell auf den RPi pico kopieren
