@@ -59,7 +59,7 @@
 #            DDDDD: 10000 FL, 01000 F4 ... 00001 F1
 #
 # ----------------------------------------------------------------------
-# 
+#
 #  Version 0.5ß 2024-06-05
 #
 import machine
@@ -69,15 +69,8 @@ import utime
 
 DEBUG = False
 
-# --------------------------------------
-# Long-preamble 0 0111CCAA 0 AAAAAAAA 0 DDDDDDDD 0 EEEEEEEE 1
-# CC=10 Bit Manipulation
-# CC=01 Verify byte
-# CC=11 Write byte
-# CC=10: DDDDDDDD = 111KDBBB mit K=0: Read, K=1: Write, D=0|1 (Datenbit), BBB = Bit 0..7
-                               
-                               
-class ELECTRICAL_SM:
+class ELECTRICAL:
+    
     # hier Verbindungen einstellen
     POWER_PIN = const(22)
     BRAKE_PIN = const(20)
@@ -85,26 +78,24 @@ class ELECTRICAL_SM:
     DIR_PIN = const(21)
     ACK_PIN = const(27)
 
+
     LMD18200_QUIESCENT_CURRENT = const(17.0)
     LMD18200_SENS_SHUNT = const(20000)                # Ohm
     AREF_VOLT = const(3300)                           # mV !!
     DENOISE_SAMPLES = const(200)                      # Anzahl der Messzyklen, für Rauschunterdrückung
     LMD18200_SENS_AMPERE_PER_AMPERE = const(0.000377) # Empfindlichkeit: 377µA / A lt. Datenblatt
     SHORT = const(1000)                               # erlaubter max. Strom in mA
-    SM_SHORT = const(250)                             # im Servicemode Power-On-Cycle für die zul. Dauer erlaubter max. Strom (mA)
-    SM_SHORT_MS = const(100)                          # zul. Dauer des erhöhten Stromes
-    PREAMBLE = const(14)                              # Standard Präambel für DCC-Instruktionen
-    LONG_PREAMBLE = const(24)                         # Präambel f. Servicemode
+    PREAMBLE = const(14)                              # Präambel f. Servicemode
     ACK_TRESHOLD = const(40)                          # Hub f. Ack
     CURRENT_SMOOTHING = const(0.175)                  # Glättung der Messergebnisse versuchen
     
     # preamble 0 11111111 0 00000000 0 11111111 1
     IDLE =      [ const(0b11111111111111111111111111111111), const(0b11110111111110000000000111111111) ]
     # preamble 0 00000000 0 00000000 0 00000000 1
-    RESET =     [ const(0b11111111111111111111111111111111), const(0b11110000000000000000000000000001) ]
     EMERG =     [ const(0b11111111111111111111111111111111), const(0b11110000000000010000010010000011) ]
     # long-preamble 0 01111111 0 00001000 0 01110111 1
-    HARDRESET = [ const(0b11111111111111111111111111111111), const(0b11110011111110000010000011101111) ]
+    
+    locos = []
     
     # DCC- und H-Bridge-LMD18200T-Modul elektrische Steuerung
     def __init__(self):   
@@ -112,21 +103,18 @@ class ELECTRICAL_SM:
         self.pwm = machine.Pin(self.PWM_PIN, machine.Pin.OUT)
         self.power = machine.Pin(self.POWER_PIN, machine.Pin.OUT)
         self.dir_pin = machine.Pin(self.DIR_PIN, machine.Pin.OUT)
-        self.analog_in = machine.ADC(machine.Pin(self.ACK_PIN))
+        self.ack = machine.ADC(machine.Pin(self.ACK_PIN))
         self.power_state = self.power.value()
-        self.ack_committed = False
         self.buffer_dirty = False
-
-        self.servicemode_instruction = {"valid": False, "write": False, "cv": 8, "bit":7, "value": 0} # dict
-                # Grundstellung: Bit 7 von CV8 auf "0" testen, valid: False - Instruction is invalid
-        self.hardreset = False
-        self.power_on_cycle = 20
+        self.emergency = False
+        self.ringbuffer = []
         
         # freq = 500_000 # 2.0us clock cycle
         self.statemachine = rp2.StateMachine(0, self.dccbit, freq=500000, set_base=machine.Pin(self.dir_pin))
         self.statemachine.active(1)
         self.messtimer = utime.ticks_ms()
         
+         
     # LMD18200T
     # Logiktabelle:
     # PWM | Dir | Brake | Output
@@ -142,7 +130,7 @@ class ELECTRICAL_SM:
         self.pwm.value(0)
         self.power.value(False)
         self.power_state = False
-
+        self.emergency = False
 
     def power_on(self):
         self.pwm.value(1)
@@ -161,7 +149,7 @@ class ELECTRICAL_SM:
         analog_value = 0
         max_value = 0
         for i in range(0, self.DENOISE_SAMPLES):
-            analog_value = (self.analog_in.read_u16() - analog_value) * self.CURRENT_SMOOTHING + analog_value * (1 - self.CURRENT_SMOOTHING)
+            analog_value = (self.ack.read_u16() - analog_value) * self.CURRENT_SMOOTHING + analog_value * (1 - self.CURRENT_SMOOTHING)
             max_value = max(analog_value, max_value)
         return round(self.raw2mA(max_value))
     
@@ -169,15 +157,43 @@ class ELECTRICAL_SM:
         if self.get_current() > self.SHORT: # Kurzschluss (ggf. im Servicemode
             raise(RuntimeError("!!! KURZSCHLUSS !!!"))
 
-    def chk_sm_short(self, end_time):  #end_time = start + 100ms
-        if end_time < utime.ticks_ms() and self.get_current() > self.SM_SHORT: # Kurzschluss (ggf. im Servicemode
-            raise(RuntimeError("!!! ZU HOHER STROM IM SERVICEMODE !!!"))
+    def emergency_stop(self):
+        self.emergency = True
+    
+    # Geschwindigkeitscode 14 Fahrstufen
+    def speed_control_14steps(self, direction, speed):
+        pass
+    
+    # Geschwindigkeitscode 128 Fahrstufen
+    def speed_control_128steps(self, direction, speed):
+        if speed == -1:
+            speed = 1
+        elif speed == 0:
+            speed = 0
+        else:
+            if speed < 126:
+                speed += 2
+            speed &= 0x7e
+        speed |= (direction << 7)
+        speed &= 0xff
+        return speed
 
-    def chk_ack(self, quiescent_current):
-        I_load = self.get_current()
-        if DEBUG:
-            print(f"Laststrom {I_load} mA, Ruhestrom: {quiescent_current} mA, Diff: {I_load - quiescent_current} mA, Schwelle: {self.ACK_TRESHOLD} mA, ACK: {I_load - quiescent_current >= self.ACK_TRESHOLD} ")
-        return I_load - quiescent_current >= self.ACK_TRESHOLD
+    # Geschwindigkeitscode 28 Fahrstufen
+    def speed_control_28steps(self, direction, speed):
+        cssss = 0
+        speed = min(speed, 28)
+        if speed == -1:                  # Notstop
+           cssss = 0b00000
+        elif 0 <= speed <= 28:
+           if speed == 0:
+               cssss = 0b00000
+           else:
+               temp = speed + 3
+               c = (temp & 0b1) << 4
+               ssss = temp >> 1
+               cssss = c | ssss
+
+        return (0b01000000 | direction << 5 | cssss) & 0xff
         
    
     def to_bin(self, num):
@@ -198,7 +214,7 @@ class ELECTRICAL_SM:
             for byte in packet:
                 err ^= byte
             packet.append(err)
-            preamble = self.LONG_PREAMBLE
+            preamble = self.PREAMBLE
             bits = preamble + len(packet) * 9 + 1
             padding = 32 - (bits % 32) # links mit 1 erweitern bis Wortgrenze
             for i in range(0, padding + preamble):
@@ -209,101 +225,76 @@ class ELECTRICAL_SM:
                 stream |= self.to_bin(i)
             stream |= 1
         return (padding + bits) // 32, stream  # Anzahl der Worte + Bitstream
-            
-                    
-    # Long-preamble 0 0111CCAA 0 AAAAAAAA 0 DDDDDDDD 0 EEEEEEEE 1
-    # CC=10 Bit Manipulation
-    # CC=01 Verify byte
-    # CC=11 Write byte
-    # CC=10: DDDDDDDD = 111KDBBB mit K=0: Read, K=1: Write, D=0|1 (Datenbit), BBB = Bit 0..7
-    def generate_servicemode_instructions(self):  # Schreiben oder Prüfen, CV 1..1024, value=0..255, bit=0..7        
+        
+    def generate_instructions(self):
         words  = []
         lengths = []
-        
-        if self.servicemode_instruction["valid"] == True:
-            
-            byte0 = 0b01110000 | self.servicemode_instruction["cv"] >> 8 & 0x03  # Address pt. 1
-            byte1 = self.servicemode_instruction["cv"] & 0xff       # Address pt. 2
-            if self.servicemode_instruction["bit"] == -1:
-                byte0 |= 0b00000100
-                if self.servicemode_instruction["write"] == True:
-                    byte0 |= 0b00001000
-                byte2 = self.servicemode_instruction["value"]
+        for loco in self.locos:
+            # Richtung, Geschwindigkeit
+            instruction = []
+            if loco.use_long_address:
+                instruction.append(192 | (loco.address // 256))
+                instruction.append(loco.address & 0xff)
             else:
-                byte0 |= 0b00001000  # Bit manipulation
-                byte2 = 0b11100000
-                if self.servicemode_instruction["write"] == True:
-                    byte2 |= 0b10000
-                if self.servicemode_instruction["value"] > 0:
-                    byte2 |= 0b1000
-                byte2 |= self.servicemode_instruction["bit"]
+                instruction.append(loco.address)
+            richtung = loco.current_speed["Dir"]
+            fahrstufe = loco.current_speed["FS"]
+            if loco.speedsteps == 128:
+                speed = self.speed_control_128steps(richtung, fahrstufe)
+                instruction.append(0b00111111)
+                instruction.append(speed)
+            elif loco.speedsteps == 28:
+                speed = self.speed_control_28steps(richtung, fahrstufe)
+                instruction.append(speed)
+            elif loco.speedsteps == 14: # @TODO
+                speed = self.speed_control_14steps(richtung, fahrstufe)
+                pass
+            else:
+                pass
 
-            l, w = self.prepare([byte0, byte1, byte2])
-            self.servicemode_instruction["valid"] = False
+            l, w = self.prepare(instruction)
             words.append(w)
             lengths.append(l)
+        
+            # Funktionen
+            for f in loco.functions:
+                instruction = []
+                if loco.use_long_address:
+                    instruction.append(192 | (loco.address // 256))
+                    instruction.append(loco.address & 0xff)
+                else:
+                    instruction.append(loco.address)
+                    
+                instruction.append(f)
 
-        return lengths, words
-        
-
-    def set_servicemode_instruction(self, cv=0, value=0, bit=-1, write=0):  # Schreiben oder Prüfen, CV 1..1024, value=0..255, bit=0..7
-        instruction = {}
-        if 0 < cv <=1024:
-            instruction["cv"] = cv - 1
-        else:
-            raise(ValueError("Error #1: Fehler CV #"))
-        
-        if 0 <= bit <= 7:
-            instruction["bit"] = bit
-            if value:
-                instruction["value"] = 1
-            else:
-                instruction["value"] = 0  # nur 0 oder 1 erlaubt
-        
-        elif bit > 7:
-            raise(ValueError("Error #3: Fehler Bit #"))
-        else:
-            instruction["bit"] = -1
-
-            if 0 <= value <= 255:
-                instruction["value"] = value
-            else:
-                raise(ValueError("Error #2: Fehler CV Wert"))
-            
-        if write > 0:
-            instruction["write"] = True
-        else:
-            instruction["write"] = False
-            
-        instruction["valid"] = True
-        
-        self.servicemode_instruction = instruction
-        self.buffer_dirty = True
-        return 0
-            
+                l, w = self.prepare(instruction)
+                words.append(w)
+                lengths.append(l)
                 
+        return lengths, words
+            
     def buffering(self):
         buffer = []
-        if self.hardreset == True:
+        if self.emergency == True:
             for i in range(5):
-                for h in self.HARDRESET:
-                    buffer.append(h)
-            self.hardreset = False
+                for e in self.EMERG:
+                    buffer.append(e)
+            self.emergency = False
             
         else:
-            l, w = self.generate_servicemode_instructions()
+            l, w = self.generate_instructions()
             for i in range(len(l)):
                 while l[i] > 0:
                     l[i] -= 1
                     buffer.append(w[i] >> l[i] * 32 & 0xffffffff)
 
             if buffer == []:
-                buffer = self.RESET
+                buffer = self.IDLE
 
         return buffer
-    
+
     def send2track(self):
-        buffer = []
+        buffer = self.IDLE
         try:
             if self.power_state == True:
                 if (utime.ticks_ms() - self.messtimer > 100):
@@ -311,56 +302,19 @@ class ELECTRICAL_SM:
                     self.messtimer = utime.ticks_ms()
      
                 if self.buffer_dirty:
-                    quiescent_current = self.get_current()   # ermittle Ruhestrom
                     buffer = self.buffering()
-                    if self.power_on_cycle > 0:
-                        end_time = utime.ticks_ms() + 100
-                        while self.power_on_cycle > 0:
-                            self.chk_sm_short(end_time)
-                            for word in self.IDLE:
-                                self.statemachine.put(word)
-                            self.power_on_cycle -= 1
-
-                        self.ack_committed = False
-
-                    if not DEBUG:
-                        state = machine.disable_irq()
-
-                    for i in range(5):  #Start min. 3x Reset
-                        for word in self.RESET:
-                            self.statemachine.put(word)
-
-                    for i in range(6):  # 5+ x verify or write command
-                        for word in buffer:
-                            self.statemachine.put(word)
-                        if i > 2:
-                            self.ack_committed |= self.chk_ack(quiescent_current)
-                            if self.ack_committed:
-                                while self.chk_ack(quiescent_current):
-                                    pass
-                                break
-                        if DEBUG:
-                            print(f"{'No ' if not self.ack_committed else '   '} ACK")
-
-                    if self.servicemode_instruction["write"] == True:
-                        for i in range(7):  # 6+ x identical write command (Recovery)
-                            for word in buffer:
-                                self.statemachine.put(word)
-                        
-                    for i in range(3):
-                        for word in self.RESET: # 1 x RESET
-                            self.statemachine.put(word)
-                        
-                    
-                    if not DEBUG:
-                        machine.enable_irq(state)
-
-                    self.buffer_dirty = False
-                        
+                    self.ringbuffer = buffer
                 else:
-                    for word in self.IDLE:
-                        self.statemachine.put(word)
-                    
+                    buffer = self.ringbuffer
+                if not DEBUG:
+                    state = machine.disable_irq()
+                for word in buffer:
+                     self.statemachine.put(word)
+    
+                if not DEBUG:
+                    machine.enable_irq(state)
+                self.buffer_dirty = False
+
         except KeyboardInterrupt:
             raise(KeyboardInterrupt("SIGINT"))
 
@@ -378,52 +332,95 @@ class ELECTRICAL_SM:
         set(pins, 0)[28]
         nop()[20]
 
-# --------------------------------------------
+# --------------------------------------
 
-class SERVICEMODE(ELECTRICAL_SM):
-
-    REPETITIONS = const(15)
-
-    def __init__(self):
+class OPERATIONS(ELECTRICAL):
+    
+    def __init__(self, address=None, use_long_address=False, speedsteps = 128, electrical=None):
         super().__init__()
-        
+        if address != None:
+            self.address = address
+            self.use_long_address = use_long_address
+            self.current_speed = {"Dir": 1, "FS": 0}
+            self.speedsteps = speedsteps
+            self.functions = [0b10000000, 0b10110000, 0b10100000]
+            super().locos.append(self)
+
     def deinit(self):
         if self.power_state == True:
             self.power_off()
         utime.sleep_ms(100)
+        self.emergency_stop()
         self = None
     
     def begin(self):
         self.power_on()
         self.chk_short()
         utime.sleep_ms(100)
-        self.power_on_cycle = 20
     
     def loop(self):
         if self.power_state == False:
             raise(RuntimeError("Power is off"))
         self.send2track()    # scheduler: Funktion liefert die DCC-Instruktionen an das Gleis
+
+    # Funktionsgruppen-ID
+    def get_function_group_index(self, function_nr):
+        if function_nr < 5:
+            function_group = 0
+        elif function_nr < 9:
+            function_group = 1
+        else:
+            function_group = 2
+        return function_group
     
-    def ack(self):
-        ack = self.ack_committed
-        self.ack_committed = False
-        return ack
+    # Shift für die Funktionsbytes    
+    def get_function_shift(self, function_nr):
+        if function_nr == 0:
+            function_shift = 4
+        else:
+            function_shift = ((function_nr - 1) % 4)
+        return function_shift
+
+    # Funktionscode
+    def function_control(self, funktion=0):
+        f =  0b10000000
+        if 0 <= funktion <= 4:
+            pass
+        elif 5 <= funktion <= 8:
+            f |= 0b110000
+        elif 9 <= funktion <= 12:
+            f |= 0b100000
+        return f
+
+    def function_on(self, function_nr):
+        self.set_function(function_nr)
+        
+    def function_off(self, function_nr):
+        self.set_function(function_nr, False)
+
+    # Funktion aktiv oder inaktiv?
+    def get_function(self, function_nr):
+        status = False
+        if 0 <= function_nr <= 12:
+            function_group = self.get_function_group_index(function_nr)
+            status = (self.functions[function_group] & (1 << self.get_function_shift(function_nr))) != 0 
+        return status
+        
+    # Funktionsbits setzen und an Lok senden
+    def set_function(self, function_nr, status = True):
+        if 0 <= function_nr <= 12:
+            function_group = self.get_function_group_index(function_nr)
+            instruction_prefix = self.function_control(function_nr)
+            if status == True:
+                self.functions[function_group] |= ((1 << self.get_function_shift(function_nr)) | instruction_prefix)
+            else:
+                self.functions[function_group] &= (~(1 << self.get_function_shift(function_nr)) | instruction_prefix)
+        self.buffer_dirty = True
+        
+    # fahre mit 14 oder 28/128 FS (128 bevorzugt)
+    def drive(self, richtung, fahrstufe):  # Fahrstufen
+        self.current_speed = {"Dir": richtung, "FS": fahrstufe}
+        self.buffer_dirty = True
+        
     
-    def manufacturer_reset():
-        self.write(8,0)
-
-    def verify_bit(self, cv=1, bit=-1, value=0):
-        # {Long-preamble} 0 011110AA 0 AAAAAAAA 0 111KDBBB 0 EEEEEEEE 1
-        self.set_servicemode_instruction(cv, value, bit)
-
-    def verify(self, cv=1, value=3):
-        # {Long-preamble} 0 011101AA 0 AAAAAAAA 0 DDDDDDDD 0 EEEEEEEE 1
-        self.set_servicemode_instruction(cv, value)
-
-    def write(self, cv=1, value=3):
-        # {Long-preamble} 0 011111AA 0 AAAAAAAA 0 DDDDDDDD 0 EEEEEEEE 1
-        self.set_servicemode_instruction(cv=cv, value=value, write=True)
-            
-            
 # --------------------------------------
-
