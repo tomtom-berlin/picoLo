@@ -63,11 +63,12 @@
 #  Version 0.5ß 2024-06-05
 #
 import machine
-import rp2
+from classes.bitgenerator import BITGENERATOR as bitgenerator
 from micropython import const
 import utime
 
 DEBUG = False
+#DEBUG = True
 
 # --------------------------------------
 # Long-preamble 0 0111CCAA 0 AAAAAAAA 0 DDDDDDDD 0 EEEEEEEE 1
@@ -79,10 +80,10 @@ DEBUG = False
                                
 class ELECTRICAL_SM:
     # hier Verbindungen einstellen
-    POWER_PIN = const(22)
+    DIR_PIN = const(19)
     BRAKE_PIN = const(20)
-    PWM_PIN = const(19)
-    DIR_PIN = const(21)
+    PWM_PIN = const(21)
+    POWER_PIN = const(22)
     ACK_PIN = const(27)
 
     LMD18200_QUIESCENT_CURRENT = const(17.0)
@@ -122,9 +123,9 @@ class ELECTRICAL_SM:
         self.hardreset = False
         self.power_on_cycle = 20
         
-        # freq = 500_000 # 2.0us clock cycle
-        self.statemachine = rp2.StateMachine(0, self.dccbit, freq=500000, set_base=machine.Pin(self.dir_pin))
-        self.statemachine.active(1)
+        self.statemachine = bitgenerator(self.dir_pin)
+        self.statemachine.begin()
+
         self.messtimer = utime.ticks_ms()
         
     # LMD18200T
@@ -140,6 +141,7 @@ class ELECTRICAL_SM:
     def power_off(self):
         self.brake.value(1)  
         self.pwm.value(0)
+        self.statemachine.end()
         self.power.value(False)
         self.power_state = False
 
@@ -186,8 +188,8 @@ class ELECTRICAL_SM:
             if num & 1 << (7 - j):
                 stream |= 1
             stream <<= 1
-        return stream
-
+        return (stream >> 1) & 0xff 
+        
     def prepare(self, packet=[]):  # Daten in den Puffer stellen
         stream = 0
         bits = 0
@@ -202,11 +204,12 @@ class ELECTRICAL_SM:
             bits = preamble + len(packet) * 9 + 1
             padding = 32 - (bits % 32) # links mit 1 erweitern bis Wortgrenze
             for i in range(0, padding + preamble):
-                stream |= 1
                 stream <<= 1
+                stream |= 1
             for i in packet:
                 stream <<= 9
                 stream |= self.to_bin(i)
+            stream <<= 1
             stream |= 1
         return (padding + bits) // 32, stream  # Anzahl der Worte + Bitstream
             
@@ -329,9 +332,12 @@ class ELECTRICAL_SM:
                     for i in range(5):  #Start min. 3x Reset
                         for word in self.RESET:
                             self.statemachine.put(word)
-
                     for i in range(6):  # 5+ x verify or write command
+                        if DEBUG:
+                            print("Service Mode Track signal:", i, end=": ")
                         for word in buffer:
+                            if DEBUG:
+                                print("["+bin(word)+"]", end=" ")
                             self.statemachine.put(word)
                         if i > 2:
                             self.ack_committed |= self.chk_ack(quiescent_current)
@@ -340,6 +346,7 @@ class ELECTRICAL_SM:
                                     pass
                                 break
                         if DEBUG:
+                            print()
                             print(f"{'No ' if not self.ack_committed else '   '} ACK")
 
                     if self.servicemode_instruction["write"] == True:
@@ -364,20 +371,6 @@ class ELECTRICAL_SM:
         except KeyboardInterrupt:
             raise(KeyboardInterrupt("SIGINT"))
 
-    # 0 = 100µs = 50 Takte, 1 = 58µs = 29 Takte 
-    @rp2.asm_pio(set_init=rp2.PIO.OUT_LOW, out_shiftdir=rp2.PIO.SHIFT_LEFT, autopull=True)
-    def dccbit():
-        label("bitstart")
-        set(pins, 1)[26]
-        out(x, 1)
-        jmp(not_x, "is_zero")
-        set(pins, 0)[27]
-        jmp("bitstart")
-        label("is_zero")
-        nop()[20]
-        set(pins, 0)[28]
-        nop()[20]
-
 # --------------------------------------------
 
 class SERVICEMODE(ELECTRICAL_SM):
@@ -387,7 +380,7 @@ class SERVICEMODE(ELECTRICAL_SM):
     def __init__(self):
         super().__init__()
         
-    def deinit(self):
+    def end(self):
         if self.power_state == True:
             self.power_off()
         utime.sleep_ms(100)

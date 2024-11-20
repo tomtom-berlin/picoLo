@@ -6,7 +6,6 @@ from classes.servicemode import SERVICEMODE as SM
 import time
 import rp2
 
-
 ########################
 def command(cv, bit):
       clx.verify_bit(cv, bit, 1)
@@ -23,7 +22,7 @@ def read(cv):
     repetitions = clx.REPETITIONS
     while chk_val != cv_val and repetitions >= 0:
         if rp2.bootsel_button():
-            clx.deinit()
+            clx.end()
             raise(RuntimeError("BootSel - Abbruch"))
 
         for bit in range(8):
@@ -37,6 +36,7 @@ def read(cv):
         else:
             repetitions -= 1
     if repetitions < 0:
+        clx.statemachine.end()
         raise(ValueError("Lesen nicht erfolgreich"))
     return cv_val
 
@@ -48,11 +48,12 @@ def test_directmode_support():
     clx.loop()
     directmode_support ^= clx.ack()
     if not directmode_support:
+        clx.statemachine.end()
         raise(AssertionError("Direct Mode vom Decoder nicht unterstützt"))
     
 def loco_on_rail():
     I = clx.get_current()
-    if I < 3:
+    if I < 2:
         print("Keine Lok erkannt", end="\r")
         return False
     print(30 * " ")
@@ -61,6 +62,10 @@ def loco_on_rail():
 
 clx = SM()
 clx.begin()
+
+# addr = 3
+# speedsteps = 28
+# use_long_address = False
 
 t = time.ticks_ms() + 5 * 6e4  ## 5 Minuten Timeout
 
@@ -71,6 +76,7 @@ try:
     timeout = t <= time.ticks_ms()
 
     if timeout:
+        clx.statemachine.end()
         raise(RuntimeError("Timeout"))
 
     for i in range(100):
@@ -98,83 +104,114 @@ try:
     print(f"gefunden: Lok mit Adresse {addr}, {speedsteps} Fahrstufen")
     
 except KeyboardInterrupt:
+    clx.end()
     raise(KeyboardInterrupt("Benutzer hat abgebrochen"))
 
-clx.deinit()
-
+clx.end()
 
 ########################
 
+#speedsteps=28
+#addr=8489
+#use_long_address = True
 
 def drive(direction=1, speed=0):
     clx.drive(direction, speed)
     
 def eventloop(t):
-    global n, speed
+    global r, n, aspect, speed, rounds, fahrzeit, direction
     if t < time.ticks_ms():
         if n == 0:
             n += 1
-            clx.function_on(3)
+            clx.ctrl_accessory_basic(3, clx.ACTIVATE, r)
+            r = clx.LEFT_OR_STOP if r == clx.RIGHT_OR_TRAVEL else clx.RIGHT_OR_TRAVEL
             
         elif n == 1:
             n += 1
-            t += 26000
-            drive(0, speed)
+            t += fahrzeit
+            if direction == 1:
+                t += 1000
+            drive(direction, speed)
             
         elif n == 2:
             n += 1
-            drive(0,0)
+            drive(direction,0)
 
         elif n == 3:
             n += 1
-            t += 27000
-            drive(1, speed)
+            t += fahrzeit
+            if direction == 0:
+                t += 1000
+            drive(0 if direction == 1 else 1, speed)
+            if aspect == 0b11111111:
+                aspect = aspect_halt
+            elif aspect == aspect_halt:
+                aspect = 0b10000111
+                
+            clx.ctrl_accessory_extended(5, aspect)
+            aspect = ((aspect << 1) & 0xff) | 0b10000001
         
         elif n == 4:
             n += 1
-            drive(1,0)
+            drive(0 if direction == 1 else 1,0)
             
         elif n == 5:
             n += 1
-            clx.function_off(3)
         
         elif n == 6:
             n += 1
-            t += 5000
-            clx.function_on(9)
+            t += 1000
         
         elif n == 7:
-            clx.function_off(9)
             n = 0
+            rounds += 1
             t = time.ticks_ms() + 2000
     return t
 
-clx = OP(addr, use_long_address, speedsteps)
+#addr, use_long_address, speedsteps = recognize_loco()
+
+clx = OP()
 clx.begin()
 
-n = 0    
+n = 0
+rounds = 0
 
-speed_ratio = 50 # Angabe in Prozent
-speed = round(speed_ratio / 100 * speedsteps)
+r = clx.LEFT_OR_STOP
+aspect = 0b10000111
+aspect_halt = 0b00000000
 
+if speedsteps != 14:
+    speedsteps = 28
+speed_ratio = 100 # Angabe in Prozent
+speed = round(speed_ratio / 100) * speedsteps
+if speed > 127:
+    speed = 127
+    
+fahrzeit = 17000
+direction = 0
 try:
     t = time.ticks_ms() + 60000
     # 1 Minute auf eine Lok warten
     while not loco_on_rail() and t > time.ticks_ms():
         clx.loop()
 
+    clx.ctrl_loco(addr, use_long_address, speedsteps)
+    clx.function_on(3)
     t = time.ticks_ms() + 2000
     # ein wenig hin- und herfahren
     while True:
         if rp2.bootsel_button():
-            clx.deinit()
+            clx.power_off()
+            clx.end()
             raise(RuntimeError("BootSel - Abbruch"))
 
         t = eventloop(t)
         clx.loop()
+#        time.sleep(0.5)
         
 except KeyboardInterrupt:
-    clx.deinit()
+    clx.power_off()
+    clx.end()
     raise(KeyboardInterrupt("Benutzer hat abgebrochen"))
 
-clx.deinit()
+clx.end()

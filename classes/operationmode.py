@@ -58,24 +58,39 @@
 #         100DDDDD Funktionen Gruppe 0 u. FL
 #            DDDDD: 10000 FL, 01000 F4 ... 00001 F1
 #
-# ----------------------------------------------------------------------
+# ----------------- ACCESSORIES --------------------
+# erzeugen von DCC-Signal für Zubehördekoder
+# Basic format:
+#         {preamble} 0 10AAAAAA 0 1AADAAR 0 EEEEEEEE 1
+#         {preamble} 0 [10 A7 A6 A5 A4 A3 A2] 0 [1 ~A10 ~A9 ~A8 D A1 A0 R] 0 EEEEEEEE 1
 #
-#  Version 0.5ß 2024-06-05
+# Extended format:
+#         {preamble} 0 10AAAAAA 0 0AAA0AA1 0 XXXXXXXX 0 EEEEEEEE 1
+#         {preamble} 0 [10 A7 A6 A5 A4 A3 A2] 0 [0 ~A10 ~A9 ~A8 0 A1 A0 1] 0 [XXXXXXXX] 0 EEEEEEEE 1
+# XXXXXXXX: 00000000 : Absolutes Halt, 000xxxxx all other aspects
+#           RZZZZZZZ : R = which output of a pair on the same address with ZZZZZZZ as active time in ms
+#           R1111111 : always on (continuously) or R0000000: always of
+#
+# ----------------------------------------------------------------------
+#  Version 0.8ß 2024-09-30
 #
 import machine
-import rp2
+from classes.bitgenerator import BITGENERATOR as bitgenerator
 from micropython import const
 import utime
 
+
 DEBUG = False
+#DEBUG = True
+motordriver = "LM18200D"  # oder "DRV8871"
 
 class ELECTRICAL:
     
     # hier Verbindungen einstellen
-    POWER_PIN = const(22)
+    DIR_PIN = const(19)
     BRAKE_PIN = const(20)
-    PWM_PIN = const(19)
-    DIR_PIN = const(21)
+    PWM_PIN = const(21)
+    POWER_PIN = const(22)
     ACK_PIN = const(27)
 
 
@@ -96,23 +111,28 @@ class ELECTRICAL:
     # long-preamble 0 01111111 0 00001000 0 01110111 1
     
     locos = []
+    devices = []
     
     # DCC- und H-Bridge-LMD18200T-Modul elektrische Steuerung
-    def __init__(self):   
-        self.brake = machine.Pin(self.BRAKE_PIN, machine.Pin.OUT)
-        self.pwm = machine.Pin(self.PWM_PIN, machine.Pin.OUT)
-        self.power = machine.Pin(self.POWER_PIN, machine.Pin.OUT)
-        self.dir_pin = machine.Pin(self.DIR_PIN, machine.Pin.OUT)
-        self.ack = machine.ADC(machine.Pin(self.ACK_PIN))
-        self.power_state = self.power.value()
-        self.buffer_dirty = False
-        self.emergency = False
-        self.ringbuffer = []
+    #
+#    @classmethod
+    def __init__(cls):   
+        cls.brake = machine.Pin(BRAKE_PIN, machine.Pin.OUT)
+        cls.pwm = machine.Pin(PWM_PIN, machine.Pin.OUT)
+        cls.power = machine.Pin(POWER_PIN, machine.Pin.OUT)
+        cls.dir_pin = machine.Pin(DIR_PIN, machine.Pin.OUT)
+        cls.ack = machine.ADC(machine.Pin(ACK_PIN))
+        cls.power_state = cls.power.value()
+        cls.buffer_dirty = False
+        cls.emergency = False
+        cls.ringbuffer = []
+        cls.accessory_buffer = [] # Accessory-Commands
+        cls.locos = []
         
-        # freq = 500_000 # 2.0us clock cycle
-        self.statemachine = rp2.StateMachine(0, self.dccbit, freq=500000, set_base=machine.Pin(self.dir_pin))
-        self.statemachine.active(1)
-        self.messtimer = utime.ticks_ms()
+        cls.statemachine = bitgenerator(cls.dir_pin)
+        cls.statemachine.begin()
+
+        cls.messtimer = utime.ticks_ms()
         
          
     # LMD18200T
@@ -125,61 +145,82 @@ class ELECTRICAL:
     #  H  |  H  |   H   | A1, B1 -> Brake (Motor kurzgeschlossen über VCC
     #  H  |  L  |   H   | A2, B2 -> Brake (Motor kurzgeschlossen über GND
     #  L  |  X  |   H   | None   -> Power off
-    def power_off(self):
-        self.brake.value(1)  
-        self.pwm.value(0)
-        self.power.value(False)
-        self.power_state = False
-        self.emergency = False
+    #
+    @classmethod
+    def power_off(cls):
+        cls.brake.value(1)  
+        cls.pwm.value(0)
+        cls.statemachine.end()
+        cls.power.value(False)
+        cls.power_state = False
+        cls.emergency = False
 
-    def power_on(self):
-        self.pwm.value(1)
-        self.power_time = utime.ticks_ms()
-        self.brake.value(0)  
-        self.power.value(True)
-        self.power_state = True
-        self.chk_short()
+    #
+    @classmethod
+    def power_on(cls):
+        cls.pwm.value(1)
+        cls.power_time = utime.ticks_ms()
+        cls.brake.value(0)  
+        cls.power.value(True)
+        cls.power_state = True
+        cls.chk_short()
 
-    def raw2mA(self, analog_value):
-        analog_value = analog_value * self.AREF_VOLT / 65535  # ADC mappt auf 0..65535
-        analog_value /= self.LMD18200_SENS_SHUNT  # Rsense
-        return (analog_value / self.LMD18200_SENS_AMPERE_PER_AMPERE) - self.LMD18200_QUIESCENT_CURRENT  # lt. Datenblatt 377 µA / A +/- 10 %
+    #
+    @classmethod
+    def raw2mA(cls, analog_value):
+        analog_value = analog_value * cls.AREF_VOLT / 65535  # ADC mappt auf 0..65535
+        analog_value /= cls.LMD18200_SENS_SHUNT  # Rsense
+        return (analog_value / cls.LMD18200_SENS_AMPERE_PER_AMPERE) - cls.LMD18200_QUIESCENT_CURRENT  # lt. Datenblatt 377 µA / A +/- 10 %
 
-    def get_current(self):
+    #
+    @classmethod
+    def get_current(cls):
         analog_value = 0
         max_value = 0
-        for i in range(0, self.DENOISE_SAMPLES):
-            analog_value = (self.ack.read_u16() - analog_value) * self.CURRENT_SMOOTHING + analog_value * (1 - self.CURRENT_SMOOTHING)
+        for i in range(0, cls.DENOISE_SAMPLES):
+            analog_value = (cls.ack.read_u16() - analog_value) * cls.CURRENT_SMOOTHING + analog_value * (1 - cls.CURRENT_SMOOTHING)
             max_value = max(analog_value, max_value)
-        return round(self.raw2mA(max_value))
+        return round(cls.raw2mA(max_value))
     
-    def chk_short(self):
-        if self.get_current() > self.SHORT: # Kurzschluss (ggf. im Servicemode
+    #
+    @classmethod
+    def chk_short(cls):
+        if cls.get_current() > cls.SHORT: # Kurzschluss (ggf. im Servicemode
             raise(RuntimeError("!!! KURZSCHLUSS !!!"))
 
-    def emergency_stop(self):
-        self.emergency = True
+    #
+    @classmethod
+    def emergency_stop(cls):
+        cls.emergency = True
     
     # Geschwindigkeitscode 14 Fahrstufen
-    def speed_control_14steps(self, direction, speed):
+    #
+    @classmethod
+    def speed_control_14steps(cls, direction, speed):
         pass
     
     # Geschwindigkeitscode 128 Fahrstufen
-    def speed_control_128steps(self, direction, speed):
+    #
+    @classmethod
+    def speed_control_128steps(cls, direction, speed):
         if speed == -1:
             speed = 1
         elif speed == 0:
             speed = 0
         else:
-            if speed < 126:
+            if speed <= 126:
                 speed += 2
-            speed &= 0x7e
+            else:
+                speed = 127
+            speed &= 0xfe
         speed |= (direction << 7)
         speed &= 0xff
         return speed
 
     # Geschwindigkeitscode 28 Fahrstufen
-    def speed_control_28steps(self, direction, speed):
+    #
+    @classmethod
+    def speed_control_28steps(cls, direction, speed):
         cssss = 0
         speed = min(speed, 28)
         if speed == -1:                  # Notstop
@@ -196,15 +237,19 @@ class ELECTRICAL:
         return (0b01000000 | direction << 5 | cssss) & 0xff
         
    
-    def to_bin(self, num):
+    #
+    @classmethod
+    def to_bin(cls, num):
         stream = 0
         for j in range(0, 8):
             if num & 1 << (7 - j):
                 stream |= 1
             stream <<= 1
-        return stream
+        return stream >> 1 & 0xff
 
-    def prepare(self, packet=[]):  # Daten in den Puffer stellen
+
+    @classmethod
+    def prepare(cls, packet=[]):  # Daten in den Puffer stellen
         stream = 0
         bits = 0
         padding = 0
@@ -214,45 +259,62 @@ class ELECTRICAL:
             for byte in packet:
                 err ^= byte
             packet.append(err)
-            preamble = self.PREAMBLE
+            preamble = cls.PREAMBLE
             bits = preamble + len(packet) * 9 + 1
             padding = 32 - (bits % 32) # links mit 1 erweitern bis Wortgrenze
             for i in range(0, padding + preamble):
-                stream |= 1
                 stream <<= 1
+                stream |= 1
+            if DEBUG:
+                print(bin(stream), ": ", len(bin(stream))-2, " <") 
             for i in packet:
                 stream <<= 9
-                stream |= self.to_bin(i)
+                stream |= cls.to_bin(i)
+            if DEBUG:
+                print(bin(stream), ": ", len(bin(stream))-2, " <") 
+            stream <<= 1
             stream |= 1
+            if DEBUG:
+                print(bin(stream), ": ", len(bin(stream))-2, " <") 
         return (padding + bits) // 32, stream  # Anzahl der Worte + Bitstream
+            
+    
+    #
+    @classmethod
+    def generate_address(cls, loco):
+        instruction = []
+        if loco.use_long_address:
+            instruction.append(192 | (loco.address // 256))
+            instruction.append(loco.address & 0xff)
+        else:
+            instruction.append(loco.address)
+        return instruction
         
-    def generate_instructions(self):
+    #
+    @classmethod
+    def generate_instructions(cls):
         words  = []
         lengths = []
-        for loco in self.locos:
+        for loco in cls.locos:
+            # lange oder kurze Adresse
+            instruction = cls.generate_address(loco)
             # Richtung, Geschwindigkeit
-            instruction = []
-            if loco.use_long_address:
-                instruction.append(192 | (loco.address // 256))
-                instruction.append(loco.address & 0xff)
-            else:
-                instruction.append(loco.address)
             richtung = loco.current_speed["Dir"]
             fahrstufe = loco.current_speed["FS"]
             if loco.speedsteps == 128:
-                speed = self.speed_control_128steps(richtung, fahrstufe)
+                speed = cls.speed_control_128steps(richtung, fahrstufe)
                 instruction.append(0b00111111)
                 instruction.append(speed)
             elif loco.speedsteps == 28:
-                speed = self.speed_control_28steps(richtung, fahrstufe)
+                speed = cls.speed_control_28steps(richtung, fahrstufe)
                 instruction.append(speed)
             elif loco.speedsteps == 14: # @TODO
-                speed = self.speed_control_14steps(richtung, fahrstufe)
+                speed = cls.speed_control_14steps(richtung, fahrstufe)
                 pass
             else:
                 pass
 
-            l, w = self.prepare(instruction)
+            l, w = cls.prepare(instruction)
             words.append(w)
             lengths.append(l)
         
@@ -267,104 +329,160 @@ class ELECTRICAL:
                     
                 instruction.append(f)
 
-                l, w = self.prepare(instruction)
+                l, w = cls.prepare(instruction)
                 words.append(w)
                 lengths.append(l)
                 
         return lengths, words
             
-    def buffering(self):
+    #
+    @classmethod
+    def buffering(cls):
         buffer = []
-        if self.emergency == True:
+        if cls.emergency == True:
             for i in range(5):
-                for e in self.EMERG:
+                for e in cls.EMERG:
                     buffer.append(e)
-            self.emergency = False
+            cls.emergency = False
             
         else:
-            l, w = self.generate_instructions()
-            for i in range(len(l)):
-                while l[i] > 0:
-                    l[i] -= 1
-                    buffer.append(w[i] >> l[i] * 32 & 0xffffffff)
-
+            l, w = cls.generate_instructions()
+            buffer = cls.make_buffer(l, w)
             if buffer == []:
-                buffer = self.IDLE
+                buffer = cls.IDLE
 
         return buffer
+    
 
-    def send2track(self):
-        buffer = self.IDLE
+    #
+    @classmethod
+    def make_buffer(cls, l, w):
+        buffer = []
+        for i in range(len(l)):
+            if DEBUG:
+                print("Array#",i, end=": ")
+            while l[i] > 0:
+                l[i] -= 1
+                word = (w[i] >> l[i] * 32 & 0xffffffff)
+                if DEBUG:
+                    print("[" + bin(word) + "]", end=" ")
+                buffer.append(word)
+            if DEBUG:
+                print()
+        return buffer
+
+    #
+    @classmethod
+    def send2track(cls):
         try:
-            if self.power_state == True:
-                if (utime.ticks_ms() - self.messtimer > 100):
-                    self.chk_short()
-                    self.messtimer = utime.ticks_ms()
+            if cls.power_state == True:
+                if (utime.ticks_ms() - cls.messtimer > 100):
+                    cls.chk_short()
+                    cls.messtimer = utime.ticks_ms()
      
-                if self.buffer_dirty:
-                    buffer = self.buffering()
-                    self.ringbuffer = buffer
+                if cls.buffer_dirty:
+                    buffer = cls.buffering()
+                    cls.ringbuffer = buffer
                 else:
-                    buffer = self.ringbuffer
+                    buffer = cls.ringbuffer
+                if buffer == []:
+                    buffer = cls.IDLE
+                
                 if not DEBUG:
                     state = machine.disable_irq()
+
+                if cls.accessory_buffer != []:
+                    if DEBUG:
+                        print("Accessory signal: ", end="")
+                    for word in cls.accessory_buffer:
+                        if DEBUG:
+                            print("["+bin(word)+"]", end=" ")
+                        cls.statemachine.put(word)
+                    cls.accessory_buffer = []
+
+                if DEBUG:
+                    print("Operation Mode Track signal:", end=" ")
                 for word in buffer:
-                     self.statemachine.put(word)
-    
+                    if DEBUG:
+                        print("["+bin(word)+"]", end=" ")
+                    cls.statemachine.put(word)
+                if DEBUG:
+                    print()
                 if not DEBUG:
                     machine.enable_irq(state)
-                self.buffer_dirty = False
+                cls.buffer_dirty = False
 
         except KeyboardInterrupt:
             raise(KeyboardInterrupt("SIGINT"))
-
-    # 0 = 100µs = 50 Takte, 1 = 58µs = 29 Takte 
-    @rp2.asm_pio(set_init=rp2.PIO.OUT_LOW, out_shiftdir=rp2.PIO.SHIFT_LEFT, autopull=True)
-    def dccbit():
-        label("bitstart")
-        set(pins, 1)[26]
-        out(x, 1)
-        jmp(not_x, "is_zero")
-        set(pins, 0)[27]
-        jmp("bitstart")
-        label("is_zero")
-        nop()[20]
-        set(pins, 0)[28]
-        nop()[20]
 
 # --------------------------------------
 
 class OPERATIONS(ELECTRICAL):
     
-    def __init__(self, address=None, use_long_address=False, speedsteps = 128, electrical=None):
+    # a few constants for accressories 
+    LEFT_OR_STOP = const(0)      # Parameter 'R': Fahrweg nach links bzw. Signal rot lt. RP 9.2.1 Abschnitt 2.4.1 
+    RIGHT_OR_TRAVEL = const(1)   # Parameter 'R': Fahrweg nach rechts bzw. Signal grün
+    DEACTIVATE = const(0)        # Parameter 'D': Aktivieren oder deaktivieren des angesprochenen Zubehörs
+    ACTIVATE = const(1)          # Parameter 'D': Aktivieren oder deaktivieren des angesprochenen Zubehörs
+    
+    active_loco = None # Active Loco
+    device = None # Active accessory
+    #
+    @classmethod
+    def __init__(cls):
         super().__init__()
-        if address != None:
-            self.address = address
-            self.use_long_address = use_long_address
-            self.current_speed = {"Dir": 1, "FS": 0}
-            self.speedsteps = speedsteps
-            self.functions = [0b10000000, 0b10110000, 0b10100000]
-            super().locos.append(self)
+        
+    @classmethod
+    def ctrl_loco(cls, address=3, use_long_address=False, speedsteps=28):
+        cls.active_loco = LOCO(address, use_long_address, speedsteps)
+        index = cls.search(cls.active_loco)
+        if index == None:
+            cls.locos.append(cls.active_loco)
+        else:
+            if cls.active_loco.speedsteps != cls.locos[index].speedsteps or \
+               cls.active_loco.use_long_address != cls.locos[index].use_long_address:
+                cls.locos.remove(cls.locos[index])
+                cls.locos.append(cls.active_loco)
+            else:
+                cls.active_loco = cls.locos[index]
 
-    def deinit(self):
-        if self.power_state == True:
-            self.power_off()
+    @classmethod
+    def search(cls, loco):
+        for i in range(len(cls.locos)):
+            if cls.locos[i].address == loco.address:
+                return i
+        return None
+
+    #
+    @classmethod
+    def end(cls):
+        if cls.power_state == True:
+            cls.power_off()
         utime.sleep_ms(100)
-        self.emergency_stop()
-        self = None
+        cls.emergency_stop()
+        cls.locos = []
+        cls.device = None
+        cls.active_loco = None
+        cls = None
     
-    def begin(self):
-        self.power_on()
-        self.chk_short()
+    #
+    @classmethod
+    def begin(cls):
+        cls.power_on()
+        cls.chk_short()
         utime.sleep_ms(100)
     
-    def loop(self):
-        if self.power_state == False:
+    # run this in a infinitive loop
+    @classmethod
+    def loop(cls):
+        if cls.power_state == False:
             raise(RuntimeError("Power is off"))
-        self.send2track()    # scheduler: Funktion liefert die DCC-Instruktionen an das Gleis
+        cls.send2track()    # scheduler: Funktion liefert die DCC-Instruktionen an das Gleis
 
     # Funktionsgruppen-ID
-    def get_function_group_index(self, function_nr):
+    #
+    @classmethod
+    def get_function_group_index(cls, function_nr):
         if function_nr < 5:
             function_group = 0
         elif function_nr < 9:
@@ -374,7 +492,9 @@ class OPERATIONS(ELECTRICAL):
         return function_group
     
     # Shift für die Funktionsbytes    
-    def get_function_shift(self, function_nr):
+    #
+    @classmethod
+    def get_function_shift(cls, function_nr):
         if function_nr == 0:
             function_shift = 4
         else:
@@ -382,7 +502,9 @@ class OPERATIONS(ELECTRICAL):
         return function_shift
 
     # Funktionscode
-    def function_control(self, funktion=0):
+    #
+    @classmethod
+    def function_control(cls, funktion=0):
         f =  0b10000000
         if 0 <= funktion <= 4:
             pass
@@ -392,35 +514,120 @@ class OPERATIONS(ELECTRICAL):
             f |= 0b100000
         return f
 
-    def function_on(self, function_nr):
-        self.set_function(function_nr)
+    #
+    @classmethod
+    def function_on(cls, function_nr):
+        cls.set_function(function_nr)
         
-    def function_off(self, function_nr):
-        self.set_function(function_nr, False)
+    #
+    @classmethod
+    def function_off(cls, function_nr):
+        cls.set_function(function_nr, False)
 
     # Funktion aktiv oder inaktiv?
-    def get_function(self, function_nr):
+    #
+    @classmethod
+    def get_function(cls, function_nr):
         status = False
         if 0 <= function_nr <= 12:
-            function_group = self.get_function_group_index(function_nr)
-            status = (self.functions[function_group] & (1 << self.get_function_shift(function_nr))) != 0 
+            function_group = cls.get_function_group_index(function_nr)
+            status = (cls.active_loco.functions[function_group] & (1 << cls.get_function_shift(function_nr))) != 0 
         return status
         
     # Funktionsbits setzen und an Lok senden
-    def set_function(self, function_nr, status = True):
+    #
+    @classmethod
+    def set_function(cls, function_nr, status = True):
         if 0 <= function_nr <= 12:
-            function_group = self.get_function_group_index(function_nr)
-            instruction_prefix = self.function_control(function_nr)
+            function_group = cls.get_function_group_index(function_nr)
+            instruction_prefix = cls.function_control(function_nr)
             if status == True:
-                self.functions[function_group] |= ((1 << self.get_function_shift(function_nr)) | instruction_prefix)
+                cls.active_loco.functions[function_group] |= ((1 << cls.get_function_shift(function_nr)) | instruction_prefix)
             else:
-                self.functions[function_group] &= (~(1 << self.get_function_shift(function_nr)) | instruction_prefix)
-        self.buffer_dirty = True
+                cls.active_loco.functions[function_group] &= (~(1 << cls.get_function_shift(function_nr)) | instruction_prefix)
+        cls.buffer_dirty = True
         
     # fahre mit 14 oder 28/128 FS (128 bevorzugt)
-    def drive(self, richtung, fahrstufe):  # Fahrstufen
-        self.current_speed = {"Dir": richtung, "FS": fahrstufe}
-        self.buffer_dirty = True
+    #
+    @classmethod
+    def drive(cls, richtung, fahrstufe):  # Fahrstufen
+        cls.active_loco.current_speed = {"Dir": richtung, "FS": fahrstufe}
+        cls.buffer_dirty = True
         
+    #
+    @classmethod
+    def speed(cls, speed=None):
+        if speed != None:
+            if speed != cls.active_loco.current_speed["FS"]:
+                cls.drive(cls.active_loco.current_speed["Dir"], speed)
+        return cls.active_loco.current_speed["FS"]
+        
+    #
+    @classmethod
+    def direction(cls, direction=None):
+        if direction != None:
+            if direction != cls.active_loco.current_speed["Dir"]:
+                cls.drive(direction, cls.active_loco.current_speed["FS"])
+        return cls.active_loco.current_speed["Dir"]
+
+    #
+    @classmethod
+    def ctrl_accessory_basic(cls, address=1, D=0, R=0):
+        b1 = 0b10000000
+        b2 = 0b11110000
+
+        device = ACCESSORY(address, D, R)
+        b = address + 3 & 0b0000011111111111
+        byte1 = ((b >> 2) & 0x3f) | b1
+
+        byte2 = ~(b >> 3) & 0b01110000 | b2 | (b << 1) & 0b00000110
+        byte2 |= (D << 3)
+        byte2 |= R
+        
+        l, w = cls.prepare([byte1, byte2])
+        cls.accessory_buffer = cls.make_buffer([l], [w])
     
-# --------------------------------------
+    #
+    @classmethod
+    def ctrl_accessory_extended(cls, address=1, aspects=0):
+        b1 = 0b10000000
+        b2 = 0b01110001
+        b3 = 0b00000000
+
+        device = ACCESSORY(address, 0, 1)
+        b = address + 3 & 0b0000011111111111
+        byte1 = ((b >> 2) & 0x3f) | b1
+        byte2 = ~(b >> 3) & 0b01110000 | b2 | (b << 1) & 0b00000110
+        byte3 = aspects & 0xff  # set aspects
+            
+        l, w = cls.prepare([byte1, byte2, byte3])
+        cls.accessory_buffer = cls.make_buffer([l], [w])
+        
+# ----------------------------------------------------------------
+
+class ACCESSORY:
+    # new accessory
+    def __init__(self, address=1, R=0, D=0, signal = False, timed = False, name=""):
+        self.address = address
+        self.R = R
+        self.D = D
+        self.signal = signal
+        self.timed = timed
+        self.name = name
+        
+class LOCO:
+    # new_loco
+    def __init__(self, address=None, use_long_address=False, speedsteps=28, name=""):
+        if address != None:
+            self.address = address
+            if(self.address > 127):
+                self.use_long_address = True
+            else:
+                self.use_long_address = use_long_address
+            self.current_speed = {"Dir": 1, "FS": 0}
+            self.speedsteps = speedsteps
+            self.functions = [0b10000000, 0b10110000, 0b10100000]
+            self.name = name
+
+        
+# ------------------------------------------------------------------
