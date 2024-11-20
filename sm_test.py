@@ -118,7 +118,7 @@ try:
     for i in cv_array:
         print(f"{i[1]:<6}", end="")
     print()
-    
+#    write(5,190)
 #     for cv in (48, 49, 50, 51, 52, 53):
 #         write(cv,16)
 #         print(f"CV{cv} = {read(cv)}", end=",  ")
@@ -127,4 +127,4 @@ try:
 except KeyboardInterrupt:
     raise(KeyboardInterrupt("Benutzer hat abgebrochen"))
 
-sm.deinit()
+sm.end()
