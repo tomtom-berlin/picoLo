@@ -31,7 +31,7 @@ ein Rangierpuzzle - oder einem Diorama und automatischem Betrieb.
   sm_test für Servicemode
 
 ### Änderungen 2024-11-20:
- - Auslagerung der Stqtemachine in eine eigene Klasse
+ - Auslagerung der Statemachine in eine eigene Klasse
  - Statemachine erzeugt nun IDLE-Pakete als "Leerlauf", wenn die CPU keine Daten liefert
  - Verwendung der H-Bridge DRV8871 (2-PWM) an Stelle der LM18200D (ist auch möglich, aber noch nicht eingebaut)
  - Fehlerbeseitigung
