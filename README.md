@@ -35,6 +35,7 @@ ein Rangierpuzzle - oder einem Diorama und automatischem Betrieb.
  - Statemachine erzeugt nun IDLE-Pakete als "Leerlauf", wenn die CPU keine Daten liefert
  - Verwendung der H-Bridge DRV8871 (2-PWM) an Stelle der LM18200D (ist auch möglich, aber noch nicht eingebaut)
  - Fehlerbeseitigung
+ - die Verzeichnisse data, images und fonts werden nicht benötigt, da im Moment keine Ausgaben auf Display erfolgen
 
 ### Installation:
 - alle Verzeichnisse z.B. mit rshell auf den RPi pico kopieren
