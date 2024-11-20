@@ -1,5 +1,5 @@
 # Fahrtest
-#  Version 0.5ß 2024-06-05
+#  Version 0.51ß 2024-11-20
 #
 from classes.operationmode import OPERATIONS as OP
 from classes.servicemode import SERVICEMODE as SM
