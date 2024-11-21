@@ -96,7 +96,7 @@ class BITGENERATOR():
         wrap()
 
 # für LM18200D H-Bridge-Module
-    @rp2.asm_pio(set_init=(rp2.PIO.OUT_HIGH, rp2.PIO.OUT_LOW, rp2.PIO.OUT_HIGH), out_shiftdir=rp2.PIO.SHIFT_LEFT, autopull=True)
+    @rp2.asm_pio(set_init=(rp2.PIO.OUT_HIGH), out_shiftdir=rp2.PIO.SHIFT_LEFT, autopull=True)
     def dccbit():
         out(isr, 32)
         wrap_target()
