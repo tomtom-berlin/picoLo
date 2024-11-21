@@ -33,7 +33,8 @@ ein Rangierpuzzle - oder einem Diorama und automatischem Betrieb.
 ### Änderungen 2024-11-20:
  - Auslagerung der Statemachine in eine eigene Klasse
  - Statemachine erzeugt nun IDLE-Pakete als "Leerlauf", wenn die CPU keine Daten liefert
- - Verwendung der H-Bridge DRV8871 (2-PWM) an Stelle der LM18200D (ist auch möglich, aber noch nicht eingebaut)
+ - Verwendung der H-Bridge DRV8871 (2-PWM) an Stelle der LM18200D im Bitgenerator,
+   aber noch nicht in den Klassen OPERATIONMODE und SERVICEMODE implementiert (eine andere Ack- und Kurzschlusserkennung ist erforderlich)
  - Fehlerbeseitigung
  - die Verzeichnisse data, images und fonts werden nicht benötigt, da im Moment keine Ausgaben auf Display erfolgen
 
