@@ -12,7 +12,7 @@ __Achtung: Das Projekt ist "work in progress" - es können noch schwerwiegende F
 Dieses Programm ist gedacht für die Verwendung mit einem "Inglenook Siding" - also
 ein Rangierpuzzle - oder einem Diorama und automatischem Betrieb.
 
-## ~~Dieses Projekt verwendet die Libraries SSD1309 und XGLCD-Font von [Rototron](https://www.rototron.info/projects/wi-fi-caller-id-blocking/)~~
+## Dieses Projekt verwendet die Libraries SSD1309 und XGLCD-Font von [Rototron](https://www.rototron.info/projects/wi-fi-caller-id-blocking/)
 
 ### Änderungen 2024-05-10: Fehlerbeseitigung, vertiefte Tests der DCC-Instruktionen
 
