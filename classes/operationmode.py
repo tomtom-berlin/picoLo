@@ -158,9 +158,9 @@ class ELECTRICAL:
     #
     @classmethod
     def power_on(cls):
+        cls.brake.value(0)  
         cls.pwm.value(1)
         cls.power_time = utime.ticks_ms()
-        cls.brake.value(0)  
         cls.power.value(True)
         cls.power_state = True
         cls.chk_short()
@@ -573,14 +573,15 @@ class OPERATIONS(ELECTRICAL):
     #
     @classmethod
     def ctrl_accessory_basic(cls, address=1, D=0, R=0):
-        b1 = 0b10000000
-        b2 = 0b11110000
-
+        byte2 = 0b10000000
         device = ACCESSORY(address, D, R)
-        b = address + 3 & 0b0000011111111111
-        byte1 = ((b >> 2) & 0x3f) | b1
-
-        byte2 = ~(b >> 3) & 0b01110000 | b2 | (b << 1) & 0b00000110
+  
+        address = address + 3 & 0b0000011111111111
+        
+        byte1 = ((address >> 2) & 0x3f) | byte2
+  
+        byte2 |= (address & 0b11) << 1
+        byte2 |= ~(address & 0b11100000000) >> 4 & 0b11110000
         byte2 |= (D << 3)
         byte2 |= R
         
