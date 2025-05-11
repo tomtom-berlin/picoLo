@@ -38,6 +38,10 @@ ein Rangierpuzzle - oder einem Diorama und automatischem Betrieb.
  - Fehlerbeseitigung
  - die Verzeichnisse data, images und fonts werden nicht benötigt, da im Moment keine Ausgaben auf Display erfolgen
 
+### Änderungen 2025-05-11: 
+ - Korrektur der Adressberechnung für Accessory-Dekoder - bei hohen Adressen wurden Bit 1 und 2 im Byte 2 falsch berechnet.
+ - Die Statemachine erzeugt Einsen als "Leerlauf", wenn die CPU keine Daten liefert
+
 ### Installation:
 - alle Verzeichnisse z.B. mit rshell auf den RPi pico kopieren
 - "op_test.py" in Thonny ausführen oder auf den RPi pico kopieren
