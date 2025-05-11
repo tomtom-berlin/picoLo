@@ -45,13 +45,12 @@ class BITGENERATOR():
         
     def begin(cls):
         cls.statemachine.active(1)
-        cls.statemachine.put(0b11110111111110000000000111111111) # IDLE als Leerlaufsequenz
+        if (cls.model == 'DRV8871'):
+            cls.statemachine.exec('set(pins, 0b11)')
         
     def end(cls):
         if cls.model == "DRV8871":
             cls.statemachine.exec('set(pins, 0b00)')
-        else: # model == "LMD18200T"
-            cls.statemachine.exec('set(pins, 0b101)')
         cls.statemachine.active(0)
 
     def put(cls, word):
@@ -62,88 +61,58 @@ class BITGENERATOR():
 # mit Leerlauf ==> IDLE?         cycles
     @rp2.asm_pio(set_init=(rp2.PIO.OUT_LOW, rp2.PIO.OUT_LOW), out_shiftdir=rp2.PIO.SHIFT_LEFT, autopull=True)
     def dccbit_2_pwm():
-        out(isr, 32)
-        wrap_target()
         label("bitstart")        # _–
-        set(pins, 0b10)[23]      # 24     2
-        jmp(not_osre, "next")    # 25     3
-        # default: Preamble, IDLE
-        mov(osr, isr)            # 26     4  
-        mov(y, 5)                # 27     5  14 Bit "1", mov nur 3 bit möglich, daher 3 Impulse * y+1
-        jmp("low")[1]            # 29    20
-        label("preamble")        # --
-        nop()                    # 29
-        set(pins, 0b10)[28]      # 29     6
-        label("low")
-        set(pins, 0b01)[28]      # 29    15 
-        set(pins, 0b10)[28]      # 29    16
-        set(pins, 0b01)[28]      # 29    15 
-        set(pins, 0b10)[28]      # 29    16
-        set(pins, 0b01)[26]      # 27    17 
-        jmp(y_dec, "preamble")   # 28    18
-        jmp("bitstart")          # 29    19
+        set(pins, 0b10)[24]      # 25     1
+        jmp(not_osre, "next")    # 26     2
+        # default: Einsen
+        mov(x, 1)                # 27     3
+        jmp("check")             # 28     4
         
-        label("next")            # --     7 
-        out(x, 1)[2]             # 28     8
+        label("next")            # --      
+        out(x, 1)[1]             # 28     5
         label("check")
-        jmp(not_x, "is_zero")    # 29     9
-        set(pins, 0b01)[27]      # 28    10
-        jmp("bitstart")          # 29    11
+        jmp(not_x, "is_zero")    # 29     6
+        set(pins, 0b01)[27]      # 28     7
+        jmp("bitstart")          # 29     8
         label("is_zero")       
-        nop()[20]                #50     12
-        set(pins, 0b01)[28]      #29     13 
-        nop()[20]                #50     14
-        wrap()
+        nop()[20]                # 50      9
+        set(pins, 0b01)[28]      # 29     10 
+        nop()[20]                # 50     11
 
-# für LM18200D H-Bridge-Module
+# für LM18200D H-Bridge-Module mit Einsen als Leerlauf
     @rp2.asm_pio(set_init=(rp2.PIO.OUT_HIGH), out_shiftdir=rp2.PIO.SHIFT_LEFT, autopull=True)
     def dccbit():
-        out(isr, 32)
-        wrap_target()
         label("bitstart")        # _–
-        set(pins, 1)[23]         # 24     2
-        jmp(not_osre, "next")    # 25     3
-        # default: Preamble, IDLE
-        mov(osr, isr)            # 26     4  
-        mov(y, 5)                # 27     5  14 Bit "1", mov nur 3 bit möglich, daher 3 Impulse * y+1
-        jmp("low")[1]            # 29    20
-        label("preamble")        # --
-        nop()                    # 29
-        set(pins, 1)[28]         # 29     6
-        label("low")
-        set(pins, 0)[28]         # 29    15 
-        set(pins, 1)[28]         # 29    16
-        set(pins, 0)[28]         # 29    15 
-        set(pins, 1)[28]         # 29    16
-        set(pins, 0)[26]         # 27    17 
-        jmp(y_dec, "preamble")   # 28    18
-        jmp("bitstart")          # 29    19
+        set(pins, 1)[24]         # 25     1
+        jmp(not_osre, "next")    # 26     2
+        # default: Einsen
+        mov(x, 1)                # 27     3  
+        jmp("check")             # 28     4
         
-        label("next")            # --     7 
-        out(x, 1)[2]             # 28     8
+        label("next")            # --      
+        out(x, 1)[1]             # 28     5
         label("check")
-        jmp(not_x, "is_zero")    # 29     9
-        set(pins, 0)[27]         # 28    10
-        jmp("bitstart")          # 29    11
+        jmp(not_x, "is_zero")    # 29     6
+        set(pins, 0)[27]         # 28     7
+        jmp("bitstart")          # 29     8
         label("is_zero")       
-        nop()[20]                #50     12
-        set(pins, 0)[28]         #29     13 
-        nop()[20]                #50     14
-        wrap()
-        
+        nop()[20]                # 50      9
+        set(pins, 0)[28]         # 29     10 
+        nop()[20]                # 50     11
 
         
 if __name__ == "__main__":
     import time
-    generator = BITGENERATOR(19, model="DRV8871")
+    generator = BITGENERATOR(19, model="LMD18200T")
     time.sleep(3)
     generator.begin()
     while True:
         try:
           n = 3
           generator.put(0b11111111111111111111111111111111)
-          generator.put(0b11110000000000010000010010000011)  #emerg
-          time.sleep(1.5)
+#          generator.put(0b11110000000000010000010010000011)  #emerg
+          generator.put(0b00000000000000000000000000000000)  #emerg
+          time.sleep(0.1)
         except KeyboardInterrupt:
             generator.end()
             raise(KeyboardInterrupt("Benutzer hat abgebrochen"))
