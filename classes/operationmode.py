@@ -72,7 +72,7 @@
 #           R1111111 : always on (continuously) or R0000000: always of
 #
 # ----------------------------------------------------------------------
-#  Version 0.8ß 2024-09-30
+#  Version 0.8ß 2025-05-10
 #
 import machine
 from classes.bitgenerator import BITGENERATOR as bitgenerator
