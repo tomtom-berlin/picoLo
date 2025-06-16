@@ -61,7 +61,7 @@
 # ----------------- ACCESSORIES --------------------
 # erzeugen von DCC-Signal für Zubehördekoder
 # Basic format:
-#         {preamble} 0 10AAAAAA 0 1AADAAR 0 EEEEEEEE 1
+#         {preamble} 0 10AAAAAA 0 1AAADAAR 0 EEEEEEEE 1
 #         {preamble} 0 [10 A7 A6 A5 A4 A3 A2] 0 [1 ~A10 ~A9 ~A8 D A1 A0 R] 0 EEEEEEEE 1
 #
 # Extended format:
@@ -71,9 +71,28 @@
 #           RZZZZZZZ : R = which output of a pair on the same address with ZZZZZZZ as active time in ms
 #           R1111111 : always on (continuously) or R0000000: always of
 #
-# ----------------------------------------------------------------------
-#  Version 0.9ß 2025-05-10
 #
+# ---------------------- POM -------------------------------------------
+# Multiprotocol decoder:
+# {preamble} 0 AAAAAAAA 0 1110CCVV 0 VVVVVVVV 0 DDDDDDDD 0 EEEEEEEE 1
+# CC = 01 - Verify
+#    = 10 - Write byte
+#    = 11 - Bit manipulation
+#
+# VV = Bit 8-9 of CV-address
+# VVVVVVVV Bit 0-7 of CV Address
+# DDDDDDDD CV value
+# EEEEEEEE XOR byte 0 - 3
+#
+# Accessory decoder
+# {preamble} 10AAAAAA 0 1AAA1AA0 0 (1110CCVV 0 VVVVVVVV 0 DDDDDDDD) 0 EEEEEEEE
+#            10AAAAAA 0 0ĀĀĀ0AA0
+#              765432   1098 10
+#
+# ----------------------------------------------------------------------
+#  Version 0.92ß 2025-06-11
+#     added POM-Support (pom_multi(…), pom_accessory(…)
+# ----------------------------------------------------------------------
 import machine
 from classes.bitgenerator import BITGENERATOR as bitgenerator
 from micropython import const
@@ -81,7 +100,7 @@ import utime
 
 
 DEBUG = False
-#DEBUG = True
+# DEBUG = True
 motordriver = "LM18200D"  # oder "DRV8871"
 
 class ELECTRICAL:
@@ -104,11 +123,10 @@ class ELECTRICAL:
     ACK_TRESHOLD = const(40)                          # Hub f. Ack
     CURRENT_SMOOTHING = const(0.175)                  # Glättung der Messergebnisse versuchen
     
-    # preamble 0 11111111 0 00000000 0 11111111 1
+    # IDLE: preamble 0 11111111 0 00000000 0 11111111 1
     IDLE =      [ const(0b11111111111111111111111111111111), const(0b11110111111110000000000111111111) ]
-    # preamble 0 00000000 0 00000000 0 00000000 1
-    EMERG =     [ const(0b11111111111111111111111111111111), const(0b11110000000000010000010010000011) ]
-    # long-preamble 0 01111111 0 00001000 0 01110111 1
+    # RESET: preamble 0 00000000 0 00000000 0 00000000 1
+    RESET =     [ const(0b11111111111111111111111111111111), const(0b11110000000000000000000000000001) ]
     
     locos = []
     devices = []
@@ -127,6 +145,7 @@ class ELECTRICAL:
         cls.emergency = False
         cls.ringbuffer = []
         cls.accessory_buffer = [] # Accessory-Commands
+        cls.pom_buffer = [] # POM-Commands
         cls.locos = []
         
         cls.statemachine = bitgenerator(cls.dir_pin)
@@ -158,12 +177,26 @@ class ELECTRICAL:
     #
     @classmethod
     def power_on(cls):
+        cls.__init__()
+        # The system has not saved the last state of the layout, therefor it must
+        # send 20 x RESET and 10 x IDLE immediately after power-on
+        for i in range(20):
+            cls.ringbuffer.append(cls.RESET[0])
+            cls.ringbuffer.append(cls.RESET[1])
+        for i in range(10):
+            cls.ringbuffer.append(cls.IDLE[0])
+            cls.ringbuffer.append(cls.IDLE[1])
+        if DEBUG:
+            for p in cls.ringbuffer:
+                print(f"{cls.to_bin(p)} ", end="")
+            print()
         cls.brake.value(0)  
         cls.pwm.value(1)
         cls.power_time = utime.ticks_ms()
         cls.power.value(True)
         cls.power_state = True
         cls.chk_short()
+        cls.send2track()
 
     #
     @classmethod
@@ -191,8 +224,22 @@ class ELECTRICAL:
     #
     @classmethod
     def emergency_stop(cls):
-        cls.emergency = True
-    
+        for l in cls.locos:
+            l.current_speed["FS"] = -1
+        cls.buffer_dirty = True
+        
+    # sends "Reset all"
+    @classmethod
+    def reset(cls):
+        cls.__init__()
+        for i in range(20):
+            cls.ringbuffer.append(cls.RESET[0])
+            cls.ringbuffer.append(cls.RESET[1])
+        for i in range(10):
+            cls.ringbuffer.append(cls.IDLE[0])
+            cls.ringbuffer.append(cls.IDLE[1])
+        cls.send2track()
+        
     # Geschwindigkeitscode 14 Fahrstufen
     #
     @classmethod
@@ -253,7 +300,11 @@ class ELECTRICAL:
         stream = 0
         bits = 0
         padding = 0
-        if 2 <= len(packet) <= 5:  # Anzahl Bytes ohne XOR
+        """
+        is a packet length of 8, 11 or 14 bytes allowed according to NMRA RP 9.2.1 § 2.4.3.2?
+        Does not work with Arduino Library NmraDcc !!
+        """
+        if 2 <= len(packet) <= 5: #or len(packet) in [8, 11, 14]:  # Anzahl Bytes ohne XOR
             # Streamlänge = jedem Byte ein 0 voran, das XOR-byte + 1 ans Ende + Preamble + Padding auf Wortgrenze (32 Bit)
             err = 0;
             for byte in packet:
@@ -339,17 +390,14 @@ class ELECTRICAL:
     @classmethod
     def buffering(cls):
         buffer = []
-        if cls.emergency == True:
-            for i in range(5):
-                for e in cls.EMERG:
-                    buffer.append(e)
-            cls.emergency = False
+#         if cls.emergency == True:
+#             buffer = cls.EMERG
             
-        else:
-            l, w = cls.generate_instructions()
-            buffer = cls.make_buffer(l, w)
-            if buffer == []:
-                buffer = cls.IDLE
+#        else:
+        l, w = cls.generate_instructions()
+        buffer = cls.make_buffer(l, w)
+        if buffer == []:
+            buffer = cls.IDLE
 
         return buffer
     
@@ -379,7 +427,7 @@ class ELECTRICAL:
                 if (utime.ticks_ms() - cls.messtimer > 100):
                     cls.chk_short()
                     cls.messtimer = utime.ticks_ms()
-     
+                     
                 if cls.buffer_dirty:
                     buffer = cls.buffering()
                     cls.ringbuffer = buffer
@@ -400,6 +448,27 @@ class ELECTRICAL:
                         cls.statemachine.put(word)
                     cls.accessory_buffer = []
 
+                if cls.pom_buffer != []:
+                    if DEBUG:
+                        print("POM signal: ", end="")
+
+                    for n in range(2):
+                        for word in cls.pom_buffer:
+                            if DEBUG:
+                                print("["+bin(word)+"]", end=" ")
+                            cls.statemachine.put(word)
+                    
+                    for i in range(5):
+                        cls.pom_buffer.append(cls.RESET[0])
+                        cls.pom_buffer.append(cls.RESET[1])
+                        
+                    for word in cls.pom_buffer:
+                        if DEBUG:
+                            print("["+bin(word)+"]", end=" ")
+                        cls.statemachine.put(word)
+                    
+                    cls.pom_buffer = []
+                    
                 if DEBUG:
                     print("Operation Mode Track signal:", end=" ")
                 for word in buffer:
@@ -456,10 +525,10 @@ class OPERATIONS(ELECTRICAL):
     #
     @classmethod
     def end(cls):
+        cls.emergency_stop()
         if cls.power_state == True:
             cls.power_off()
         utime.sleep_ms(100)
-        cls.emergency_stop()
         cls.locos = []
         cls.device = None
         cls.active_loco = None
@@ -518,11 +587,13 @@ class OPERATIONS(ELECTRICAL):
     @classmethod
     def function_on(cls, function_nr):
         cls.set_function(function_nr)
+        cls.loop()
         
     #
     @classmethod
     def function_off(cls, function_nr):
         cls.set_function(function_nr, False)
+        cls.loop()
 
     # Funktion aktiv oder inaktiv?
     #
@@ -553,6 +624,7 @@ class OPERATIONS(ELECTRICAL):
     def drive(cls, richtung, fahrstufe):  # Fahrstufen
         cls.active_loco.current_speed = {"Dir": richtung, "FS": fahrstufe}
         cls.buffer_dirty = True
+        cls.loop()
         
     #
     @classmethod
@@ -587,6 +659,7 @@ class OPERATIONS(ELECTRICAL):
         
         l, w = cls.prepare([byte1, byte2])
         cls.accessory_buffer = cls.make_buffer([l], [w])
+        cls.loop()
     
     #
     @classmethod
@@ -603,7 +676,89 @@ class OPERATIONS(ELECTRICAL):
             
         l, w = cls.prepare([byte1, byte2, byte3])
         cls.accessory_buffer = cls.make_buffer([l], [w])
+        cls.loop()
         
+
+    # Accessory decoder
+    # {preamble} 10AAAAAA 0 1AAA1AA0 0 (1110CCVV 0 VVVVVVVV 0 DDDDDDDD) 0 EEEEEEEE
+    @classmethod
+    def pom_accessory(cls, address=0, cv=0, value=0): # Diese Grundeinstellung resultiert in einem Fehler
+        if address == 0:
+            return
+        if type(cv) != int: # must not set more then 1 byte at once!
+            return
+        if cv < 0 or cv > 1024:
+            return
+        if value < 0 or value > 255:
+            return
+#         if type(cv) != type(value):
+#             return
+#         if type(cv) == list:
+#             if len(cv) != len(value):
+#                 return
+#         if type(value) == list:
+#             if len(value) > 4 or len(value) < 1:
+#                 return
+
+        """
+        Arduino NmraDcc Library does not support
+        "Basic Accessory Decoder Operations Mode Programming" (RP 9.2.1, § 2.4.3.1)
+        If bit 3 of byte 2 is 1 then the operation results in 'Unsupported OPS Mode CV Addressing Mode'
+        2.4.3.2 Extended Accessory Decoder Operations Mode Programming" with bit 3 of byte 2
+        set to 0 works well
+        """ 
+#        byte2 = 0b10001000 # 
+        byte2 = 0b00000001
+
+        byte1msk = 0b10000000
+        byte3 = 0b11101100 # write CV
+      
+        address = address + 3 & 0b0000011111111111
+        byte1 = ((address >> 2) & 0x3f) | byte1msk
+      
+        byte2 |= ~(address & 0b11100000000) >> 4 & 0b01110000
+        byte2 |= (address & 0x3) << 1
+        if type(cv) == list:
+            instructions = [byte1, byte2]
+            for i in range(len(cv)):
+                cv[i] -= 1
+                instructions.append(byte3 | (cv[i] >> 8) & 0x3) # CV Bit 8-9
+                instructions.append(cv[i] & 0xff)  # CV Bit 0-7
+                instructions.append(value[i] & 0xff)
+            
+        else:
+            cv -= 1
+            byte3 = byte3 | (cv >> 8) & 0x3 # CV Bit 8-9
+            byte4 = cv & 0xff  # CV Bit 0-7
+            byte5 = value & 0xff
+            instructions = [byte1, byte2, byte3, byte4, byte5]
+
+        if DEBUG:
+            print(instructions)
+        l, w = cls.prepare(instructions)
+        if DEBUG:
+            print(l, w)
+        cls.pom_buffer = cls.make_buffer([l], [w])
+        if DEBUG:
+            print(cls.pom_buffer)
+        cls.loop()
+
+    #
+    @classmethod
+    def pom_multi(cls, address=0, cv=0, value=0): # Diese Grundeinstellung resultiert in einem Fehler
+        if address == 0 or cv == 0:
+            return []
+        cv -= 1
+        byte1 = address& 0x7f
+        byte2 = 0b11101100 | ((cv >> 8) & 0x3) # CV Bit 8-9
+        byte3 = cv & 0xff
+        byte4 = value & 0xff
+        instructions = [byte1, byte2, byte3, byte4]
+        
+        l, w = cls.prepare(instructions)
+        cls.pom_buffer = cls.make_buffer([l], [w])
+        cls.loop()
+
 # ----------------------------------------------------------------
 
 class ACCESSORY:
