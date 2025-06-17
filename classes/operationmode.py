@@ -197,6 +197,7 @@ class ELECTRICAL:
         cls.power_state = True
         cls.chk_short()
         cls.send2track()
+        cls.ringbuffer = []
 
     #
     @classmethod
@@ -390,10 +391,6 @@ class ELECTRICAL:
     @classmethod
     def buffering(cls):
         buffer = []
-#         if cls.emergency == True:
-#             buffer = cls.EMERG
-            
-#        else:
         l, w = cls.generate_instructions()
         buffer = cls.make_buffer(l, w)
         if buffer == []:
@@ -447,7 +444,9 @@ class ELECTRICAL:
                             print("["+bin(word)+"]", end=" ")
                         cls.statemachine.put(word)
                     cls.accessory_buffer = []
-
+                    if DEBUG:
+                        print()
+ 
                 if cls.pom_buffer != []:
                     if DEBUG:
                         print("POM signal: ", end="")
@@ -466,6 +465,8 @@ class ELECTRICAL:
                         if DEBUG:
                             print("["+bin(word)+"]", end=" ")
                         cls.statemachine.put(word)
+                    if DEBUG:
+                        print()
                     
                     cls.pom_buffer = []
                     

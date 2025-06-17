@@ -65,7 +65,7 @@ class BITGENERATOR():
         set(pins, 0b10)[24]      # 25     1
         jmp(not_osre, "next")    # 26     2
         # default: Einsen
-        mov(x, 1)                # 27     3
+        mov(x, 0)                # 27     3
         jmp("check")             # 28     4
         
         label("next")            # --      
@@ -86,7 +86,7 @@ class BITGENERATOR():
         set(pins, 1)[24]         # 25     1
         jmp(not_osre, "next")    # 26     2
         # default: Einsen
-        mov(x, 1)                # 27     3  
+        mov(x, 0)                # 27     3  
         jmp("check")             # 28     4
         
         label("next")            # --      
@@ -108,7 +108,6 @@ if __name__ == "__main__":
     generator.begin()
     while True:
         try:
-          n = 3
           generator.put(0b11111111111111111111111111111111)
 #          generator.put(0b11110000000000010000010010000011)  #emerg
           generator.put(0b00000000000000000000000000000000)  #emerg
