@@ -26,8 +26,8 @@ def loco_on_rail():
 
 def drive(direction=1, speed=0, fahrzeit=0):
     print(direction, speed, end=" ")
-    t = time.ticks() + fahrzeit
-    while t > time.ticks():
+    t = time.ticks_ms() + (fahrzeit * 1000)
+    while t > time.ticks_ms():
         clx.drive(direction, speed)
         clx.loop()
     print("fertig")
