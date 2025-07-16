@@ -101,7 +101,7 @@ import utime
 
 DEBUG = False
 # DEBUG = True
-motordriver = "LM18200D"
+motordriver = "LMD18200T"
 # oder
 #motordriver =  "DRV8871"
 
