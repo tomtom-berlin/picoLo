@@ -10,6 +10,8 @@ import rp2
 speedsteps=128
 addr=545
 use_long_address = True
+fahrzeit = 15
+direction = 1 # vorwärts = 1, rückwärts = 0
    
 def loco_on_rail():
     I = clx.get_current()
@@ -24,8 +26,8 @@ def loco_on_rail():
 
 def drive(direction=1, speed=0, fahrzeit=0):
     print(direction, speed, end=" ")
-    t = time.ticks_ms() + fahrzeit
-    while t > time.ticks_ms():
+    t = time.ticks() + fahrzeit
+    while t > time.ticks():
         clx.drive(direction, speed)
         clx.loop()
     print("fertig")
@@ -43,9 +45,6 @@ print(speed)
 if speed > 127:
     speed = 127
     
-fahrzeit = 15000
-direction = 1
-
 try:
     t = time.ticks_ms() + 60000
     # 1 Minute auf eine Lok warten
