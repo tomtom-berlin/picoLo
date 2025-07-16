@@ -1,5 +1,6 @@
 # picoLok - Digitalsteuerung mit RPI pico
 
+### Version 0.91ß 2025-07-16
 ### Version 0.9ß  2025-05-11
 ### Version 0.51ß 2024-11-20
 ### Version 0.5ß  2024-06-06
@@ -43,6 +44,10 @@ ein Rangierpuzzle - oder einem Diorama und automatischem Betrieb.
  - Korrektur der Adressberechnung für Accessory-Dekoder - bei hohen Adressen wurden Bit 1 und 2 im Byte 2 falsch berechnet.
  - Die Statemachine erzeugt Einsen als "Leerlauf", wenn die CPU keine Daten liefert
 
+### Änderungen 2025-07-16:
+ - POM für Multifunktions- und Accessorydecoder hinzugefügt
+ - Die Datei op_test_mit_display.py beinhaltet eine interaktive Steuerung
+   
 ### Installation:
 - alle Verzeichnisse z.B. mit rshell auf den RPi pico kopieren
 - "op_test.py" in Thonny ausführen oder auf den RPi pico kopieren
