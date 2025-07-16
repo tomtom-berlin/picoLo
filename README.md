@@ -46,7 +46,7 @@ ein Rangierpuzzle - oder einem Diorama und automatischem Betrieb.
 
 ### Änderungen 2025-07-16:
  - POM für Multifunktions- und Accessorydecoder hinzugefügt
- - Die Datei op_test_mit_display.py beinhaltet eine interaktive Steuerung
+ - Die Datei op_test-mit-display.py beinhaltet eine interaktive Steuerung
    
 ### Installation:
 - alle Verzeichnisse z.B. mit rshell auf den RPi pico kopieren
