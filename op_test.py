@@ -37,7 +37,7 @@ if speedsteps != 14:
     speedsteps = 128
 speed_ratio = 65 # Angabe in Prozent
 speed = round(speed_ratio * speedsteps / 100)
-print(speed)
+
 if speed > 127:
     speed = 127
     
