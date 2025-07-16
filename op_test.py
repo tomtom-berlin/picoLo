@@ -11,7 +11,7 @@ speedsteps=128
 addr=545
 use_long_address = True
 fahrzeit = 15
-direction = 1 # vorwärts = 1, rückwärts = 0
+direction = 1 # Richtung zu Beginn, vorwärts = 1, rückwärts = 0
    
 def loco_on_rail():
     I = clx.get_current()
@@ -25,14 +25,10 @@ def loco_on_rail():
 ########################
 
 def drive(direction=1, speed=0, fahrzeit=0):
-    print(direction, speed, end=" ")
     t = time.ticks_ms() + (fahrzeit * 1000)
     while t > time.ticks_ms():
         clx.drive(direction, speed)
         clx.loop()
-    print("fertig")
-
-    
 
 clx = OP()
 clx.begin()
@@ -61,8 +57,7 @@ try:
             clx.end()
             raise(RuntimeError("BootSel - Abbruch"))
         drive(direction, speed, fahrzeit)
-        direction = (direction + 1) % 2
-        print(direction)
+        direction = 1 if direction == 0 else 0
         
 except KeyboardInterrupt:
     clx.power_off()
