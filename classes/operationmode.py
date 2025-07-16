@@ -1,7 +1,7 @@
 #
 # "pico Lo" - Digitalsteuerung mit RPI pico
 #
-# (c) 2024 Thomas Borrmann
+# (c) 2024-25 Thomas Borrmann
 # Lizenz: GPLv3 (sh. https://www.gnu.org/licenses/gpl-3.0.html.en)
 #
 # Funktionen für den Bereich "ELECTRICAL" der NMRA DCC RP 9.2
@@ -101,7 +101,9 @@ import utime
 
 DEBUG = False
 # DEBUG = True
-motordriver = "LM18200D"  # oder "DRV8871"
+motordriver = "LM18200D"
+# oder
+#motordriver =  "DRV8871"
 
 class ELECTRICAL:
     
@@ -114,6 +116,7 @@ class ELECTRICAL:
 
 
     LMD18200_QUIESCENT_CURRENT = const(17.0)
+    DRV8871_QUIESCENT_CURRENT = const(13.0)
     LMD18200_SENS_SHUNT = const(20000)                # Ohm
     AREF_VOLT = const(3300)                           # mV !!
     DENOISE_SAMPLES = const(200)                      # Anzahl der Messzyklen, für Rauschunterdrückung
@@ -148,8 +151,8 @@ class ELECTRICAL:
         cls.pom_buffer = [] # POM-Commands
         cls.locos = []
         
-        cls.statemachine = bitgenerator(cls.dir_pin)
-        cls.statemachine.begin()
+        cls.statemachine = bitgenerator(cls.dir_pin, model=motordriver)
+#        cls.statemachine.begin()
 
         cls.messtimer = utime.ticks_ms()
         
@@ -195,6 +198,7 @@ class ELECTRICAL:
         cls.power_time = utime.ticks_ms()
         cls.power.value(True)
         cls.power_state = True
+        cls.statemachine.begin()
         cls.chk_short()
         cls.send2track()
         cls.ringbuffer = []
@@ -203,6 +207,8 @@ class ELECTRICAL:
     @classmethod
     def raw2mA(cls, analog_value):
         analog_value = analog_value * cls.AREF_VOLT / 65535  # ADC mappt auf 0..65535
+        if motordriver == "DRV8871":
+            return analog_value - cls.DRV8871_QUIESCENT_CURRENT
         analog_value /= cls.LMD18200_SENS_SHUNT  # Rsense
         return (analog_value / cls.LMD18200_SENS_AMPERE_PER_AMPERE) - cls.LMD18200_QUIESCENT_CURRENT  # lt. Datenblatt 377 µA / A +/- 10 %
 
@@ -643,7 +649,10 @@ class OPERATIONS(ELECTRICAL):
                 cls.drive(direction, cls.active_loco.current_speed["FS"])
         return cls.active_loco.current_speed["Dir"]
 
-    #
+    # Basic accessory command:
+    # Param: address per output (4 per board)
+    #        D = Power on (1) or off (0)
+    #        R = Direction normal (0) or diverging (1)
     @classmethod
     def ctrl_accessory_basic(cls, address=1, D=0, R=0):
         byte2 = 0b10000000
@@ -680,6 +689,7 @@ class OPERATIONS(ELECTRICAL):
         cls.loop()
         
 
+    # POM
     # Accessory decoder
     # {preamble} 10AAAAAA 0 1AAA1AA0 0 (1110CCVV 0 VVVVVVVV 0 DDDDDDDD) 0 EEEEEEEE
     @classmethod
@@ -744,7 +754,7 @@ class OPERATIONS(ELECTRICAL):
             print(cls.pom_buffer)
         cls.loop()
 
-    #
+    # Multifunction decoder
     @classmethod
     def pom_multi(cls, address=0, cv=0, value=0): # Diese Grundeinstellung resultiert in einem Fehler
         if address == 0 or cv == 0:
