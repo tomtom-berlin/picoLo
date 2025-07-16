@@ -11,8 +11,9 @@ speedsteps=128
 addr=545
 use_long_address = True
 fahrzeit = 15
-direction = 1 # Richtung zu Beginn, vorwärts = 1, rückwärts = 0
-   
+direction = 0 # Richtung zu Beginn, rückwärts = 0, vorwärts = 1
+
+
 def loco_on_rail():
     I = clx.get_current()
     if I < 2:
@@ -30,6 +31,8 @@ def drive(direction=1, speed=0, fahrzeit=0):
         clx.drive(direction, speed)
         clx.loop()
 
+    
+
 clx = OP()
 clx.begin()
 
@@ -40,7 +43,9 @@ speed = round(speed_ratio * speedsteps / 100)
 
 if speed > 127:
     speed = 127
-    
+
+f = 0
+
 try:
     t = time.ticks_ms() + 60000
     # 1 Minute auf eine Lok warten
@@ -48,16 +53,21 @@ try:
         clx.loop()
 
     clx.ctrl_loco(addr, use_long_address, speedsteps)
-    clx.function_on(0)
     t = time.ticks_ms() + 2000
     # ein wenig hin- und herfahren
+    d = direction
     while True:
         if rp2.bootsel_button():
             clx.power_off()
             clx.end()
             raise(RuntimeError("BootSel - Abbruch"))
-        drive(direction, speed, fahrzeit)
-        direction = 1 if direction == 0 else 0
+        clx.function_on(f)
+        drive(d, speed, fahrzeit)
+        d = 1 if d == 0 else 0
+        clx.function_off(f)
+        if d == direction:
+            f += 1
+            f %= 13
         
 except KeyboardInterrupt:
     clx.power_off()
@@ -65,3 +75,4 @@ except KeyboardInterrupt:
     raise(KeyboardInterrupt("Benutzer hat abgebrochen"))
 
 clx.end()
+
