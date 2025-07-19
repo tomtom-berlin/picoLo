@@ -1,5 +1,6 @@
 # picoLok - Digitalsteuerung mit RPI pico
 
+### Version 0.92ß 2025-07-16
 ### Version 0.91ß 2025-07-16
 ### Version 0.9ß  2025-05-11
 ### Version 0.51ß 2024-11-20
@@ -47,7 +48,11 @@ ein Rangierpuzzle - oder einem Diorama und automatischem Betrieb.
 ### Änderungen 2025-07-16:
  - POM für Multifunktions- und Accessorydecoder hinzugefügt
  - Die Datei op_test-mit-display.py beinhaltet eine interaktive Steuerung
-   
+
+### Änderungen 2025-07-19:
+  - OPERATIONS: Updatefunktion für Lokeigenschaften "Name" und "Speedsteps" eingefügt, Typos beseitigt
+  - opt_test-mit-display Testroutinen erweitert
+
 ### Installation:
 - alle Verzeichnisse z.B. mit rshell auf den RPi pico kopieren
 - "op_test.py" in Thonny ausführen oder auf den RPi pico kopieren
