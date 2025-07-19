@@ -92,7 +92,284 @@
 # ----------------------------------------------------------------------
 #  Version 0.92ß 2025-06-11
 #     added POM-Support (pom_multi(…), pom_accessory(…)
+#
+#  Version 0.93ß 2025-07-19
+#     added update functions for loco properties
+#
 # ----------------------------------------------------------------------
+"""
+#
+# "pico Lo" - Digitalsteuerung mit RPI pico
+#
+# (c) 2024-25 Thomas Borrmann
+# Lizenz: GPLv3 (sh. https://www.gnu.org/licenses/gpl-3.0.html.en)
+#
+# Funktionen für den Bereich "ELECTRICAL" der NMRA DCC RP 9.2
+#
+# ----------------------------------------------------------------------
+#
+# NMRA-DCC Instructions
+#
+#                        11AAAAAA 0 AAAAAAAA               lange Adresse
+#              berechnen:  [Adresse // 256 | 0xc0)] [Adresse & 0xff]
+#   {instruction-bytes} = CCCDDDDD
+#                         CCCDDDDD 0 DDDDDDDD
+#                         CCCDDDDD 0 DDDDDDDD 0 DDDDDDDD
+#
+#   CCCDDDDD = CCCGGGGG or CCCGTTTT
+#
+#   CCC = 000: Decoder and Consist Control Instruction
+#              Decoder Control (GTTTT=0TTTF):
+#                   {instruction byte} = 0000TTTF
+#                   {instruction byte} = 0000TTTF 0 DDDDDDDD
+#
+#              TTT = 101 Set Advanced Addressing (CV#29 bit 5==F)
+#                    {instruction byte} = 00001011: Lange Adresse benutzen
+#                                         00001010: kurze Adresse benutzen 
+#
+#                    111 Ack anfordern
+#                    {instruction byte} = 00001111
+#
+#  @TODO
+#              Consist Control (GTTTT=1TTTT)
+#                    {instruction bytes} = 0001TTTT 0 0AAAAAAA
+#  /@TODO
+#
+#         001: Advanced Operation Instructions 001GGGGG
+#                    {instruction bytes} = 001GGGGG 0 DDDDDDDD
+#                    GGGGG = 11111: 128 Speed Step Control
+#                            DDDDDDDD = DSSSSSSS
+#
+#                            D=1: vorwärts,
+#                            D=0: rückwärts
+#                            SSSSSSS = 0:        Stop
+#                                      1:        Notstop
+#                                      2 .. 127: Fahrstufe 1..126
+#
+#         010: Speed and Direction Instruction for reverse operation
+#         011: Speed and Direction Instruction for forward operation
+#
+#         01DCSSSS wie RP 9.2 - Fahren (sh. "CSSSS berechnen" unter "Baseline instructions")
+#           D = 0: rueckwaerts, D=1: vorwaerts
+#            CSSSS: Fahrstufen = 0: Stop, 1-28: ((Fahrstufe + 3 & 0x01) << 4) | ((Fahrstufe + 3) << 1)
+#
+#         100: Function Group One Instruction
+#
+#         100DDDDD Funktionen Gruppe 0 u. FL
+#            DDDDD: 10000 FL, 01000 F4 ... 00001 F1
+#
+# ----------------- ACCESSORIES --------------------
+# erzeugen von DCC-Signal für Zubehördekoder
+# Basic format:
+#         {preamble} 0 10AAAAAA 0 1AAADAAR 0 EEEEEEEE 1
+#         {preamble} 0 [10 A7 A6 A5 A4 A3 A2] 0 [1 ~A10 ~A9 ~A8 D A1 A0 R] 0 EEEEEEEE 1
+#
+# Extended format:
+#         {preamble} 0 10AAAAAA 0 0AAA0AA1 0 XXXXXXXX 0 EEEEEEEE 1
+#         {preamble} 0 [10 A7 A6 A5 A4 A3 A2] 0 [0 ~A10 ~A9 ~A8 0 A1 A0 1] 0 [XXXXXXXX] 0 EEEEEEEE 1
+# XXXXXXXX: 00000000 : Absolutes Halt, 000xxxxx all other aspects
+#           RZZZZZZZ : R = which output of a pair on the same address with ZZZZZZZ as active time in ms
+#           R1111111 : always on (continuously) or R0000000: always of
+#
+#
+# ---------------------- POM -------------------------------------------
+# Multiprotocol decoder:
+# {preamble} 0 AAAAAAAA 0 1110CCVV 0 VVVVVVVV 0 DDDDDDDD 0 EEEEEEEE 1
+# CC = 01 - Verify
+#    = 10 - Write byte
+#    = 11 - Bit manipulation
+#
+# VV = Bit 8-9 of CV-address
+# VVVVVVVV Bit 0-7 of CV Address
+# DDDDDDDD CV value
+# EEEEEEEE XOR byte 0 - 3
+#
+# Accessory decoder
+# {preamble} 10AAAAAA 0 1AAA1AA0 0 (1110CCVV 0 VVVVVVVV 0 DDDDDDDD) 0 EEEEEEEE
+#            10AAAAAA 0 0ĀĀĀ0AA0
+#              765432   1098 10
+#
+# ----------------------------------------------------------------------
+#  Version 0.92ß 2025-06-11
+#     added POM-Support (pom_multi(…), pom_accessory(…)
+#
+#  Version 0.93ß 2025-07-19
+#     added update functions for loco properties
+#
+# ----------------------------------------------------------------------
+
+DEBUG = False
+# DEBUG = True
+motordriver = "LMD18200T"
+# oder
+#motordriver =  "DRV8871"
+
+class ELECTRICAL:
+    
+    # hier Verbindungen einstellen
+    DIR_PIN = const(19)
+    BRAKE_PIN = const(20)
+    PWM_PIN = const(21)
+    POWER_PIN = const(22)
+    ACK_PIN = const(27)
+
+
+    LMD18200_QUIESCENT_CURRENT = const(17.0)
+    DRV8871_QUIESCENT_CURRENT = const(13.0)
+    LMD18200_SENS_SHUNT = const(20000)                # Ohm
+    AREF_VOLT = const(3300)                           # mV !!
+    DENOISE_SAMPLES = const(200)                      # Anzahl der Messzyklen, für Rauschunterdrückung
+    LMD18200_SENS_AMPERE_PER_AMPERE = const(0.000377) # Empfindlichkeit: 377µA / A lt. Datenblatt
+    SHORT = const(1000)                               # erlaubter max. Strom in mA
+    PREAMBLE = const(14)                              # Präambel f. Servicemode
+    ACK_TRESHOLD = const(40)                          # Hub f. Ack
+    CURRENT_SMOOTHING = const(0.175)                  # Glättung der Messergebnisse versuchen
+    
+    # IDLE: preamble 0 11111111 0 00000000 0 11111111 1
+    IDLE =      [ const(0b11111111111111111111111111111111), const(0b11110111111110000000000111111111) ]
+    # RESET: preamble 0 00000000 0 00000000 0 00000000 1
+    RESET =     [ const(0b11111111111111111111111111111111), const(0b11110000000000000000000000000001) ]
+    
+    locos = []
+    devices = []
+    
+    # DCC- und H-Bridge-LMD18200T-Modul elektrische Steuerung
+    def __init__(cls):   
+        cls.brake = machine.Pin(BRAKE_PIN, machine.Pin.OUT)
+        cls.pwm = machine.Pin(PWM_PIN, machine.Pin.OUT)
+        cls.power = machine.Pin(POWER_PIN, machine.Pin.OUT)
+        cls.dir_pin = machine.Pin(DIR_PIN, machine.Pin.OUT)
+        cls.ack = machine.ADC(machine.Pin(ACK_PIN))
+        cls.power_state = cls.power.value()
+        cls.buffer_dirty = False
+        cls.emergency = False
+        cls.ringbuffer = []
+        cls.accessory_buffer = [] # Accessory-Commands
+        cls.pom_buffer = [] # POM-Commands
+        cls.locos = [] # active Locos
+        cls.accessories = [] # active Accessoires
+        cls.statemachine = bitgenerator(cls.dir_pin, model=motordriver)
+        cls.messtimer = utime.ticks_ms()
+        
+         
+    # LMD18200T
+    # Logiktabelle:
+    # PWM | Dir | Brake | Output
+    # ----+-----+-------+-------
+    #  H  |  H  |   L   | A1, B2 -> A = VCC, B = GND
+    #  H  |  L  |   L   | A2, B1 -> A = GND, B = VCC
+    #  L  |  X  |   L   | A1, B1 -> Brake (Motor kurzgeschlossen über VCC
+    #  H  |  H  |   H   | A1, B1 -> Brake (Motor kurzgeschlossen über VCC
+    #  H  |  L  |   H   | A2, B2 -> Brake (Motor kurzgeschlossen über GND
+    #  L  |  X  |   H   | None   -> Power off
+    #
+
+    # Track power off
+    def power_off(cls):
+
+    # Track power on
+    def power_on(cls):
+
+    # Measuring current, returns int (mA)
+    def get_current(cls):
+     
+    # Emergency stop
+    def emergency_stop(cls):
+        
+# --------------------------
+class OPERATIONS(ELECTRICAL):
+    
+    # a few constants for accressories 
+    LEFT_OR_STOP = const(0)      # Parameter 'R': Fahrweg nach links bzw. Signal rot lt. RP 9.2.1 Abschnitt 2.4.1 
+    RIGHT_OR_TRAVEL = const(1)   # Parameter 'R': Fahrweg nach rechts bzw. Signal grün
+    DEACTIVATE = const(0)        # Parameter 'D': Aktivieren oder deaktivieren des angesprochenen Zubehörs
+    ACTIVATE = const(1)          # Parameter 'D': Aktivieren oder deaktivieren des angesprochenen Zubehörs
+    
+    active_loco = None # Active Loco
+    device = None # Active accessory
+    
+    #
+    def __init__(cls):
+        
+    # Control this loco
+    def ctrl_loco(cls, address=3, use_long_address=False, speedsteps=28, name=""):
+ 
+    # update loco name property
+    def update_name(cls, name=""):
+    
+    # update active loco speedsteps property
+    def update_speedsteps(cls, speedsteps=28):
+
+    # test if loco address exists, returns array index
+    def search(cls, address):
+
+    #
+    def end(cls):
+    
+    def begin(cls):
+    
+    # run this in an infinitive loop
+    def loop(cls):
+
+    # Function on
+    def function_on(cls, function_nr):
+        cls.set_function(function_nr)
+        cls.loop()
+        
+    # Function off
+    def function_off(cls, function_nr):
+
+    # Funktion aktiv oder inaktiv?
+    def get_function(cls, function_nr):
+        
+    # Funktionsbits setzen und an Lok senden
+    def set_function(cls, function_nr, status = True):
+        
+    # fahre mit 14 oder 28/128 FS (128 bevorzugt)
+    def drive(cls, richtung, fahrstufe):  # Fahrstufen
+        
+    # Set/Get loco speed (speedstep), returns current speedstep
+    def speed(cls, speed=None):
+        
+    # Control loco direction
+    def direction(cls, direction=None):
+
+    # Determine if accessory exists, returns arrayindex
+    def search_accessory(cls, addr):
+
+    # Basic accessory command:
+    # Param: address per output (4 per board)
+    #        D = Power on (1) or off (0)
+    #        R = Direction normal (0) or diverging (1)
+    @classmethod
+    
+    # Control extended Accessor Decoder
+    def ctrl_accessory_extended(cls, address=1, aspects=0):
+
+    # POM
+    # Accessory decoder
+    # {preamble} 10AAAAAA 0 1AAA1AA0 0 (1110CCVV 0 VVVVVVVV 0 DDDDDDDD) 0 EEEEEEEE
+    def pom_accessory(cls, address=0, cv=0, value=0): # Diese Grundeinstellung resultiert in einem Fehler
+
+    # POM
+    # Multifunction decoder
+    def pom_multi(cls, address=0, cv=0, value=0): # Diese Grundeinstellung resultiert in einem Fehler
+
+# ----------------------------------------------------------------
+
+class ACCESSORY:
+    # new accessory
+    def __init__(self, address=1, R=0, D=0, signal = False, timed = False, name=""):
+        
+class LOCO:
+    # new_loco
+    def __init__(self, address=None, use_long_address=False, speedsteps=28, name="")
+
+        
+# ------------------------------------------------------------------
+"""
+
+
 import machine
 from classes.bitgenerator import BITGENERATOR as bitgenerator
 from micropython import const
@@ -149,7 +426,8 @@ class ELECTRICAL:
         cls.ringbuffer = []
         cls.accessory_buffer = [] # Accessory-Commands
         cls.pom_buffer = [] # POM-Commands
-        cls.locos = []
+        cls.locos = [] # active Locos
+        cls.accessories = [] # active Accessoires
         
         cls.statemachine = bitgenerator(cls.dir_pin, model=motordriver)
 #        cls.statemachine.begin()
@@ -509,23 +787,45 @@ class OPERATIONS(ELECTRICAL):
         super().__init__()
         
     @classmethod
-    def ctrl_loco(cls, address=3, use_long_address=False, speedsteps=28):
+    def ctrl_loco(cls, address=3, use_long_address=False, speedsteps=28, name=""):
         cls.active_loco = LOCO(address, use_long_address, speedsteps)
-        index = cls.search(cls.active_loco)
+        index = cls.search(cls.active_loco.address)
+
         if index == None:
             cls.locos.append(cls.active_loco)
         else:
+            if (name != ""):
+                cls.active_loco.name = name
+            else:
+                cls.active_loco.name = cls.locos[index].name
+                
             if cls.active_loco.speedsteps != cls.locos[index].speedsteps or \
-               cls.active_loco.use_long_address != cls.locos[index].use_long_address:
+               cls.active_loco.use_long_address != cls.locos[index].use_long_address or \
+               cls.active_loco.name != cls.locos[index].name:
+                
+                cls.active_loco.current_speed = cls.locos[index].current_speed
+                cls.active_loco.functions = cls.locos[index].functions
                 cls.locos.remove(cls.locos[index])
                 cls.locos.append(cls.active_loco)
             else:
                 cls.active_loco = cls.locos[index]
 
     @classmethod
-    def search(cls, loco):
+    def update_name(cls, name=""):
+        index = cls.search(cls.active_loco.address)
+        if index != None:
+            cls.locos[index].name = name
+
+    @classmethod
+    def update_speedsteps(cls, speedsteps=28):
+        index = cls.search(cls.active_loco.address)
+        if index != None:
+            cls.locos[index].speedsteps = speedsteps
+
+    @classmethod
+    def search(cls, address):
         for i in range(len(cls.locos)):
-            if cls.locos[i].address == loco.address:
+            if cls.locos[i].address == address:
                 return i
         return None
 
@@ -649,6 +949,14 @@ class OPERATIONS(ELECTRICAL):
                 cls.drive(direction, cls.active_loco.current_speed["FS"])
         return cls.active_loco.current_speed["Dir"]
 
+
+    @classmethod
+    def search_accessory(cls, addr):
+        for i in range(len(cls.accessories)):
+            if cls.accessories[i].address == addr:
+                return i
+        return None
+
     # Basic accessory command:
     # Param: address per output (4 per board)
     #        D = Power on (1) or off (0)
@@ -657,6 +965,12 @@ class OPERATIONS(ELECTRICAL):
     def ctrl_accessory_basic(cls, address=1, D=0, R=0):
         byte2 = 0b10000000
         device = ACCESSORY(address, D, R)
+        i = cls.search_accessory(device.address)
+        if(i != None):
+            cls.accessories[i].D = D
+            cls.accessories[i].R = R
+        else:
+            cls.accessories.append(device)
   
         address = address + 3 & 0b0000011111111111
         
@@ -678,7 +992,14 @@ class OPERATIONS(ELECTRICAL):
         b2 = 0b01110001
         b3 = 0b00000000
 
-        device = ACCESSORY(address, 0, 1)
+        device = ACCESSORY(address, 0, 1, True)
+        i = cls.search_accessory(device.address)
+        if(i != None):
+            cls.accessories[i]["D"] = D
+            cls.accessories[i]["R"] = R
+        else:
+            cls.accessories.append(device)
+
         b = address + 3 & 0b0000011111111111
         byte1 = ((b >> 2) & 0x3f) | b1
         byte2 = ~(b >> 3) & 0b01110000 | b2 | (b << 1) & 0b00000110
