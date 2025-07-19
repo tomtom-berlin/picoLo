@@ -1,6 +1,6 @@
 # picoLok - Digitalsteuerung mit RPI pico
 
-### Version 0.92ß 2025-07-16
+### Version 0.92ß 2025-07-19
 ### Version 0.91ß 2025-07-16
 ### Version 0.9ß  2025-05-11
 ### Version 0.51ß 2024-11-20
