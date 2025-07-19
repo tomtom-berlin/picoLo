@@ -5,13 +5,20 @@
 from classes.operationmode import OPERATIONS as OP
 from classes.servicemode import SERVICEMODE as SM
 import time
-#import rp2
 import uselect as select
-from machine import Timer, Pin, I2C
+from machine import Timer, Pin, I2C, UART
 from libraries.ssd1309 import Display as DISPLAY
 from libraries.xglcd_font import XglcdFont as fm
 import os, re
 import sys
+from tools.byte_print import int2bin
+
+from micropython import const
+
+TX = const(12)
+RX = const(13)
+SDA = const(4)
+SCL = const(5)
 
 ######################################################################
         
@@ -44,12 +51,15 @@ def get_font_size(path, pattern):
 
 speedsteps = None
 loco = None
-access = None
-use_long_access = False
+address = None
+use_long_address = False
 functions = []
     
 op = None
 sm = None
+uart = None
+client_uart = False
+client_kbd = False
 ########################
         
 
@@ -60,6 +70,8 @@ def finish():
         op.emergency_stop()
         op.power_off()
         op.end()
+    if uart != None:
+        uart.deinit()
     if not oled == None:
         oled.clear()
         font = fm(f"/libraries/fonts/PerfectPixel_18x25.c", 18, 25)
@@ -178,6 +190,10 @@ def halt():
     op.drive(direction, 0)
     time.sleep(0.5)
 
+# Abfrage, ob das eingegebne Zeichen eine Ziffer ist
+def is_number(number):
+    return number in ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
+
 def pom_input():
     i = 1
     j = 0
@@ -186,17 +202,18 @@ def pom_input():
     val = 0
     while i < len(input_buffer):
         c = input_buffer[i]
-        if c == '*' or c == ',':
-            if j == 0:
-                addr = val
-                j += 1
-                val = 0
-            elif j == 1:
-                cv = val
-                j += 1
-                val = 0
-        else:
+        if is_number(c):
             val = val * 10 + int(c)
+        else:
+            if c == '*' or c == ',':
+                if j == 0:
+                    addr = val
+                    j += 1
+                    val = 0
+                elif j == 1:
+                    cv = val
+                    j += 1
+                    val = 0
 
         i += 1
     return (addr, cv, val)
@@ -213,12 +230,54 @@ def pom_loco():
     op.pom_multi(addr, cv, value)
 #     pass
 
+def value_of(input_buffer):
+    value = 0
+    for i in range(1, len(input_buffer)):
+        c = input_buffer[i]
+        if is_number(c):
+            value = value * 10 + int(c)
+        else:
+            break
+    return value
+
+def text_of(input_buffer):
+    t = input_buffer[1:len(input_buffer)]
+    s = ""
+    for c in t:
+        s += c
+    return s
+
 def show_fn():
-    print(" F0  F1  F2  F3  F4  F5  F6  F7  F8  F9 F10 F11 F12")
     for f in range(0, 13):
-        print(f"{'*' if op.get_function(f) else ' ':^4}", end="")
+        print(f"{'F' if op.get_function(f) else 'f'}{f:<4}", end="")
     print()
     
+def show_accessories():
+    if (len(op.accessories) == 0):
+        print("Kein Zubehör")
+        return
+    for i in range(len(op.accessories)):
+        acc = op.accessories[i]
+        print(f"{acc.address:<5}", end=", ")
+        if(acc.signal):
+            print(f"{int2bin(acc.aspect):^9}", end=", ")
+        else:
+            print(f"D={acc.D} R={acc.R}", end=", ")
+        print(acc.name)
+
+def show_locos():
+    if (len(op.locos) == 0):
+        print("Keine Triebfahrzeuge")
+        return
+    for i in range(len(op.locos)):
+        loco = op.locos[i]
+        print(f"Addr: {loco.address:>5} | ", end="")
+        print(f"{loco.speedsteps:3} Fahrstufen | ", end="")
+        print(f"FS {loco.current_speed["FS"]:>3} {'vorw.' if loco.current_speed["Dir"]==1 else 'rückw.':<6} | ", end="")
+        print(loco.name)
+        show_fn()
+        print()
+        
 def get_loco():
     global loco, use_long_address, speedsteps
     clear_input_buffer()
@@ -227,36 +286,73 @@ def get_loco():
     set_loco_data(loco)
     print(f"Lok {loco}, {'Lange' if use_long_address else 'Kurze'} Adresse, {speedsteps} Fahrstufen")
     op.begin()
-    op.ctrl_loco(loco, use_long_access, speedsteps)
+    op.ctrl_loco(loco, use_long_address, speedsteps)
     print(f"Lok {loco} bereit")
     
 def process_input_buffer():
-    global loco, turnout, speed, max_speed, direction
+    global turnout, direction, max_speed, speed, loco, use_long_address, speedsteps
     cmd = None
     value = 0
+#     print(input_buffer)
     if len(input_buffer) > 0:
         cmd = input_buffer[0]
         if  cmd == 'P' or cmd == 'p':
             pom_loco()
         elif cmd == 'A' or cmd == 'a':
             pom_acc()
-        elif not (cmd == 'l' or cmd == 'L' or cmd == 'w' or cmd == 'W') and loco == None:
+        elif not (cmd == 'l' or cmd == 'L' or cmd == 'w' or cmd == 'W' or cmd == 't' or cmd == 'T') and loco == None:
             print("no loco")
-            return
+            return True
+        
+        if cmd in ['e', 'E', 'q', 'Q', '+', '-', 'h', 'H']:
+            if cmd == 'e' or cmd == 'E': # Nothalt alles
+                print(f"Nothalt")
+                op.emergency_stop()
+                
+            elif cmd == 'q' or cmd == 'Q': # Ende
+                return False
+
+            if cmd == 'H' or cmd == 'h': # Halt
+                print(f"Lok {loco} Halt")
+                speed = 0
+                halt()
             
-        if cmd in ['V', 'v', 'R', 'r', 'f', 'F', 'l', 'L', 'd', 'D', 'w', 'W', '+', '-']:
-            if cmd in ['f', 'F', 'w', 'W', 'l', 'L', 'd', 'D', 'v', 'r']:
-                for i in range(1, len(input_buffer)):
-                    value = value * 10 + int(input_buffer[i])
+            elif cmd == '+':
+                speed += input_buffer.count('+')
+                if speed > max_speed:
+                    speed = max_speed
+                print(f"Lok {loco} Fahrstufe {speed}")
+                drive(direction, speed)
+
+            elif cmd == '-':
+                speed -= input_buffer.count('-')
+                if speed < 0:
+                    speed = 0
+                print(f"Lok {loco} Fahrstufe {speed}")
+                drive(direction, speed)
+
+            
+        if cmd in ['V', 'v', 'R', 'r', 'f', 'F', 'l', 'L', 'd', 'D', 'w', 'W', 't', 'T', 's', 'S', 'n', 'N']:
+            if cmd in ['f', 'F', 'w', 'W', 't', 'T', 'l', 'L', 'd', 'D', 'v', 'r', 's', 'S', 'n', 'N']:
+                value = value_of(input_buffer)
                 if cmd == 'l' or cmd == 'L':
                     if len(input_buffer) == 1:
                         get_loco()
                     else:
-                        print(f"Lok {value} bedienen")
+                        print(f"aktive Lokadresse: {value}")
                         loco = value
                         if loco != None:
-                            set_loco_data(loco)
-                            op.ctrl_loco(loco, use_long_access, speedsteps)
+                            op.ctrl_loco(loco, use_long_address, speedsteps)
+                if cmd == 's' or cmd == 'S':
+                        speedsteps = value
+                        if loco != None:
+                            print(f"{loco}: {speedsteps} Fahrstufen")
+                            op.update_speedsteps(speedsteps)                            
+                if cmd == 'n' or cmd == 'N':
+                        name = text_of(input_buffer)
+                        print(f"Adresse {loco}: {name}")
+                        if loco != None:
+                            op.update_name(name)
                             
                 elif cmd == 'd' or cmd == 'D':
                     if len(input_buffer) == 1:
@@ -282,13 +378,30 @@ def process_input_buffer():
                             op.function_on(value)
                         
                 elif cmd == 'w':
-                    print(f"Weiche {value} gerade")
-                    op.ctrl_accessory_basic(value, 1, 0)
+                    if len(input_buffer) == 1:
+                        show_accessories()
+                    else:
+                        print(f"Weiche {value} gerade")
+                        op.ctrl_accessory_basic(value, 1, 0)
                     
                 elif cmd == 'W':
-                    print(f"Weiche {value} abzweigend")
-                    op.ctrl_accessory_basic(value, 1, 1)
+                    if len(input_buffer) == 1:
+                        show_accessories()
+                    else:
+                        print(f"Weiche {value} abzweigend")
+                        op.ctrl_accessory_basic(value, 1, 1)
                     
+                elif cmd == 't' or cmd == 'T':
+                    if len(input_buffer) == 1:
+                        show_accessories()
+                    else:
+                        i = op.search_accessory(value)
+                        if i != None:
+                            print(f"Weiche {value} umlegen")
+                            r = op.accessories[i].R
+                            r = 1 if r == 0 else 0
+                            op.ctrl_accessory_basic(value, 1, r)
+
                 elif cmd == 'r':  # Richtung rueckwaerts
                     if(direction == 1):
                         halt()
@@ -296,7 +409,7 @@ def process_input_buffer():
                         time.sleep(1.5)
                     if value != 0:
                         speed = value if speed <= max_speed else max_speed
-                    print(f"Lok {loco} <-- Fahrstufe {speed}")
+                    print(f"Lok {loco} <<- Fahrstufe {speed}")
                     direction = 0
                     drive(direction, speed)
                     
@@ -307,7 +420,7 @@ def process_input_buffer():
                         time.sleep(1.5)
                     if value != 0:
                         speed = value if speed <= max_speed else max_speed
-                    print(f"Lok {loco} --> Fahrstufe {speed}")
+                    print(f"Lok {loco} ->> Fahrstufe {speed}")
                     direction = 1
                     drive(direction, speed)
 
@@ -316,26 +429,29 @@ def process_input_buffer():
                     halt()
                 speed = max_speed
                 direction = 0
-                print(f"Lok {loco} HALT, <-- Fahrstufe {max_speed}")
+                print(f"Lok {loco} HALT, <<- Fahrstufe {max_speed}")
                 drive(direction, speed)
             elif cmd == 'V':  # Richtung vorwaerts, Höchstgeschwindigkeit
                 if(direction == 0):
                     halt()
                 speed = max_speed
                 direction = 1
-                print(f"Lok {loco} HALT, --> Fahrstufe {max_speed}")
+                print(f"Lok {loco} HALT, ->> Fahrstufe {max_speed}")
                 drive(direction, speed)
         else:
             cmd = None
+        return True
             
 def clear_input_buffer():
-    global input_buffer
+    global input_buffer, client_uart
     input_buffer = []
+    client_uart = False
+    client_kbd = False
 
 def usage():
     print("""
 Benutzung:
-Zeichen eingeben und mit Enter abschicken
+Zeichen eingeben und mit Enter abschicken, Befehlstrenner = '#'
 
 Zeichen| Führt aus
 -------+---------------------------------------------------------------------
@@ -343,7 +459,9 @@ Zeichen| Führt aus
 e      | Nothalt alle Fahrzeuge
        |
 l      | Lok suchen
-l{nnn} | Lok bedienen {nnn} = Dekoder-Adresse
+l{nnn} | Lok bedienen {nnn} = Dekoder-Adresse (sh.unten)
+n{ccc} | Name setzen {ccc} = Name
+s{nnn} | Fahrstufen setzen {nnn} = Fahrstufen (28/128)
 v{nnn} | Lok vorwärts Fahrstufe {nnn}
 r{nnn} | Lok rückwärts Fahrstufe {nnn}
 +      | Lok Fahrstufe erhöhen um 1 (mehrere Plus = Anzahl der Fahrstufen)
@@ -373,52 +491,23 @@ A o. a | für Accessory-Decoder
 
 def eventloop():
     global direction, max_speed, speed, loco, use_long_address, speedsteps
-    c = kbd_in()
+    answer = True
+    c = poll_cmd()
     if c != None:
-        if c == 'e' or c == 'E': # Nothalt alles
-            clear_input_buffer()            
-            print(f"Nothalt")
-            op.emergency_stop()
-            
-        elif c == 'q' or c == 'Q': # Ende
-            return False
-#         print(f"{c}, buffer:{input_buffer}")
-        if c == 'H' or c == 'h': # Halt
-            clear_input_buffer()            
-            print(f"Lok {loco} Halt")
-            speed = 0
-            halt()
-        
-        elif c == '+':
-            clear_input_buffer()            
-            if speed < max_speed:
-                speed += 1
-            print(f"Lok {loco} Fahrstufe {speed}")
-            drive(direction, speed)
-
-        elif c == '-':
-            clear_input_buffer()            
-            if speed > 0:
-                speed -= 1
-            print(f"Lok {loco} Fahrstufe {speed}")
-            drive(direction, speed)
-
-        elif c == '?':
+        if c == '?':
             usage()
-
         elif c == '#' or c == '\n':
-            process_input_buffer()
-            clear_input_buffer()            
+            answer = process_input_buffer()
+            clear_input_buffer()
+            
         else:
             input_buffer.append(c)
-    return True
+    return answer
 
 
 def start_display():
     global font
-    SCL_PIN = 5
-    SDA_PIN = 4
-    i2c = I2C(0, scl=Pin(SCL_PIN), sda=Pin(SDA_PIN), freq=400000)
+    i2c = I2C(0, scl=Pin(SCL), sda=Pin(SDA), freq=400000)
     adr_i2c = i2c.scan()
     # print(f"Devices @ {adr_i2c}")
 
@@ -431,86 +520,54 @@ def start_display():
     oled.clear()
     return oled
 
+def start_uart():
+    uart = UART(0, baudrate=9600, tx=Pin(TX), rx=Pin(RX))
+    return uart
+
 
 def set_loco_data(loco):
-    global functions, speed, speedsteps, max_speed, direction, speed_ratio
-    functions = []
-    direction = 0
-    if speedsteps == None:
-        speedsteps = 128
+    pass
         
-    if loco == 3:
-        speed_ratio = 95 # Angabe in Prozent
-        functions = [0, 8, 9, 10]
-    elif loco == 10:
-        speed_ratio = 75 # Angabe in Prozent
-        direction = 1
-        functions = [3]
-    elif loco == 20:
-        speed_ratio = 75 # Angabe in Prozent
-        direction = 1
-        functions = [3]
-    elif loco == 23:
-        speed_ratio = 100 # Angabe in Prozent
-        direction = 1
-    #    functions = [3]
-    elif loco == 55:
-        speed_ratio = 33 # Angabe in Prozent
-        functions = [1,4,5]
-    elif loco == 89:
-        speed_ratio = 60 # Angabe in Prozent
-        functions= [4]
-        direction = 1
-    elif loco == 133:
-        speed_ratio = 70 # Angabe in Prozent
-        functions = [0]
-    elif loco == 135:
-        speed_ratio = 40 # Angabe in Prozent
-        functions = [0]
-    elif loco == 312:
-        speed_ratio = 25 # Angabe in Prozent
-        functions= [4,5]
-        direction = 0
-    elif loco == 260:
-        speed_ratio = 65 # Angabe in Prozent
-        direction = 0
-    elif loco == 8489:
-        speed_ratio = 26 # Angabe in Prozent
-        direction = 1
-    elif loco == 8615:
-        speed_ratio = 72 # Angabe in Prozent
-        functions= [1]
-        direction = 0
-    elif loco == 8646:
-        speed_ratio = 55 # Angabe in Prozent
-        functions= [1]
-        direction = 0
-
-    s = ""
-    for f in functions:
-        s += f"[{f}] "
-    print(s)
-    max_speed = round((speed_ratio * speedsteps) / 100)
-    if max_speed > 127:
-        max_speed = 127
-    speed = 0
-        
-
 ##---------------------------------
 
 # Funktion: Eingabe lesen
-def kbd_in():
-    return(sys.stdin.read(1) if spoll.poll(0) else None)
+def poll_cmd():
+    global client_uart, client_kbd
+    if not client_kbd:
+        if uart != None:
+            if uart.any():
+                client_uart = True
+                return uart.read(1)
+            
+    if not client_uart:
+        if spoll.poll(0):
+            client_kbd = True
+            return sys.stdin.read(1)
+    return None
 
 def show_cpu_freq(t):
-    text(oled, font, 5, 45 if oled.height > 32 else 24, f"DCC-Strom: {op.get_current():>6} mA")
+    response(5, 45 if oled.height > 32 else 24, f"DCC-Strom: {op.get_current():>6} mA")
     if loco != None:
-        text(oled, font, 5, 5, f"Lok: {loco} FS: {'->>' if direction == 1 else '<<-'}{speed}")
+        response(5, 5, f"Lok:{loco:^5} FS:{'->>' if direction == 1 else '<<-':^3}{speed:^3}")
         s = ""
-        for f in range(0, 13):
-            s += '*' if op.get_function(f) else '.'
-        text(oled, font, 0, 18, f"{s:^20}") 
-        
+        if loco != None:
+            for f in range(0, 13):
+                s += '*' if op.get_function(f) else '.'
+        else:
+            s = "............."
+        response(0, 18, f"{s:^20}") 
+  
+  
+# Response if available
+def uart_out(uart=None, string=""):
+    if(uart != None):
+        uart.write(string)         # write string
+
+def response(col=0, line=0, s=""):
+    text(oled, font, col, line, s) 
+    uart_out(uart, s) 
+    
+
 ##############################################################
 
 # Tastatur-Eingabe
@@ -525,15 +582,18 @@ current_A = op.get_current()
 turnout = 1
 # Lok
 loco = None
+speedsteps = 128
+direction = 0
+speed = 0
+max_speed = 127
+speed_ratio = 90
+functions = []
 
 oled = start_display()
+uart = start_uart()
 
 input_buffer = []
     
-speed_ratio = 65
-direction = 0
-functions = []
-
 time.sleep(1)
 usage()
 
@@ -548,6 +608,7 @@ try:
         if I < -1:
             print(f"Keine Lok erkannt ({I:>4} mA)", end="\r")
         else:
+            print("Beginne")
             break
      
     print(30 * " ")
