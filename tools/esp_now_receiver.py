@@ -8,10 +8,11 @@ import espnow
 from machine import UART, Pin
 import struct
 import binascii
+import utime
 from micropython import const
 
-SHUTDOWN_PIN = const(10)  # Layuot ausschalten, aktiv HIGH
-RESET_PIN = const(3)      # Reset des Layouts auslösen, aktiv HIGHT
+SHUTDOWN_PIN = const(10)  # Layout ausschalten, aktiv HIGH
+RESET_PIN = const(3)      # Reset des Layouts auslösen, aktiv HIGH
 LED_PIN = const(8)        # Nur zum Testen, Verwendung nicht empfehlenswert!!
 
 # 84:0d:8e:8c:98:ee = rcv
@@ -32,16 +33,19 @@ def reset():          # Wert an Ausgang shutdown und reset
     led_pin.on()      #                     0          1
     reset_pin.on()    
     shutdown_pin.off()
+    utime.sleep_ms(20)
 
 def emerg():
     led_pin.on()      #                     1          1
     reset_pin.on()
     shutdown_pin.on()
+    utime.sleep_ms(20)
 
 def shutdown():
     led_pin.on()      #                     1          0
-    reset_pin.off()
     shutdown_pin.on()
+    reset_pin.off()
+    utime.sleep_ms(20)
 
 sta = network.WLAN(network.STA_IF)
 sta.active(True)
@@ -90,7 +94,6 @@ print("Starte UART und ESP-Now")
 old_host = None
 while True:
     host, msg = e.recv()
-    
     if(host):
         host_mac = ''.join('%x' % b for b in host)
         if(host_mac != old_host):
@@ -126,16 +129,15 @@ while True:
 #         uart.write(f"{print_mac(host=throttle_mac):<10} [{msg_type:>3}]{throttle_id:>3} : {cmd[0].decode('utf-8').split('#')}\n")
         print("!"+text[:length].decode('utf-8')+"!")
         if text[:length].decode('utf-8') == "<<<QUIT>>>":
-            print("quit()")
+            print("shutdown()")
             shutdown()
-            break
+            
         if text[:length].decode('utf-8') == "<<<EMERG>>>":
-            print("quit()")
+            print("emerg()")
             emerg()
-            break
+            
         if text[:length].decode('utf-8') == "<<<RESET>>>":
-            print("quit()")
+            print("reset()")
             reset()
-            break
- 
+            
         
